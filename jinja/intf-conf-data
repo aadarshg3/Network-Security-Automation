@@ -1,0 +1,4 @@
+interface gig0/1
+description Connected to server1
+speed 1000
+duplex full

@@ -1,0 +1,160 @@
+netg@DESKTOP-EBH0I8A:~/devnet$ python3
+Python 3.10.12 (main, Jun 11 2023, 05:26:28) [GCC 11.4.0] on linux
+Type "help", "copyright", "credits" or "license" for more information.
+>>> 
+>>> 
+>>> device_info = {}
+>>> 
+>>> type(device_info)
+<class 'dict'>
+>>> 
+>>> device_info = {1,2,3}
+>>> 
+>>> type(device_info)
+<class 'set'>
+>>> 
+>>> device_info = {k1:1, k2:2, k3:3}
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+NameError: name 'k1' is not defined
+>>> 
+>>> 
+>>> device_info = {"k1":1, "k2":2, "k3":3}
+>>> 
+>>> type(device_info)
+<class 'dict'>
+>>> 
+>>> 
+>>> 
+>>> device_info = { "device_ip": "10.2.3.4", "model": 9800, "site": "site-a", "rack": "rack1", "os_ver": 16.6, "mgmt_ips": ["10.3.3.1", "10.3.3.2"]}
+>>> 
+>>> 
+>>> device_info
+{'device_ip': '10.2.3.4', 'model': 9800, 'site': 'site-a', 'rack': 'rack1', 'os_ver': 16.6, 'mgmt_ips': ['10.3.3.1', '10.3.3.2']}
+>>> 
+>>> 
+>>> device_info["device_ip"]
+'10.2.3.4'
+>>> device_info["model"]
+9800
+>>> 
+>>> device_info[0]
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+KeyError: 0
+>>> device_info["model"] = 9300
+>>> 
+>>> device_info
+{'device_ip': '10.2.3.4', 'model': 9300, 'site': 'site-a', 'rack': 'rack1', 'os_ver': 16.6, 'mgmt_ips': ['10.3.3.1', '10.3.3.2']}
+>>> 
+>>> device_info["mgmt_ips"]
+['10.3.3.1', '10.3.3.2']
+>>> 
+>>> type(device_info["mgmt_ips"])
+<class 'list'>
+>>> device_info["mgmt_ips"][1]
+'10.3.3.2'
+>>> 
+>>> 
+>>> dir(device_info)
+['__class__', '__class_getitem__', '__contains__', '__delattr__', '__delitem__', '__dir__', '__doc__', '__eq__', '__format__', '__ge__', '__getattribute__', '__getitem__', '__gt__', '__hash__', '__init__', '__init_subclass__', '__ior__', '__iter__', '__le__', '__len__', '__lt__', '__ne__', '__new__', '__or__', '__reduce__', '__reduce_ex__', '__repr__', '__reversed__', '__ror__', '__setattr__', '__setitem__', '__sizeof__', '__str__', '__subclasshook__', 'clear', 'copy', 'fromkeys', 'get', 'items', 'keys', 'pop', 'popitem', 'setdefault', 'update', 'values']
+>>> 
+>>> 
+>>> device_info.keys()
+dict_keys(['device_ip', 'model', 'site', 'rack', 'os_ver', 'mgmt_ips'])
+>>> 
+>>> device_info.values()
+dict_values(['10.2.3.4', 9300, 'site-a', 'rack1', 16.6, ['10.3.3.1', '10.3.3.2']])
+>>> 
+>>> device_info.items()
+dict_items([('device_ip', '10.2.3.4'), ('model', 9300), ('site', 'site-a'), ('rack', 'rack1'), ('os_ver', 16.6), ('mgmt_ips', ['10.3.3.1', '10.3.3.2'])])
+>>> 
+>>> device_info = { "device_ip": "10.2.3.4", "model": 9800, "site": "site-a", "rack": "rack1", "os_ver": 16.6, "mgmt_ips": ["10.3.3.1", "10.3.3.2"]}
+>>> 
+>>> 
+>>> device_info1 = { "device_ip": "10.2.3.4", "model": 9800, "site": "site-a", "rack": "rack1", "os_ver": 16.6,
+ "mgmt_ips": ["10.3.3.1", "10.3.3.2"]}
+>>> device_info2 = { "device_ip": "10.2.3.4", "model": 9800, "site": "site-a", "rack": "rack1", "os_ver": 16.6,
+ "mgmt_ips": ["10.3.3.1", "10.3.3.2"]}
+>>> device_info3 = { "device_ip": "10.2.3.4", "model": 9800, "site": "site-a", "rack": "rack1", "os_ver": 16.6,
+ "mgmt_ips": ["10.3.3.1", "10.3.3.2"]}
+>>> 
+>>> device_info = [device_info1, device_info2, device_info3]
+>>> 
+>>> device_info
+[{'device_ip': '10.2.3.4', 'model': 9800, 'site': 'site-a', 'rack': 'rack1', 'os_ver': 16.6, 'mgmt_ips': ['10.3.3.1', '10.3.3.2']}, {'device_ip': '10.2.3.4', 'model': 9800, 'site': 'site-a', 'rack': 'rack1', 'os_ver': 16.6, 'mgmt_ips': ['10.3.3.1', '10.3.3.2']}, {'device_ip': '10.2.3.4', 'model': 9800, 'site': 'site-a', 'rack': 'rack1', 'os_ver': 16.6, 'mgmt_ips': ['10.3.3.1', '10.3.3.2']}]
+>>> 
+>>> 
+>>> device_info[0]
+{'device_ip': '10.2.3.4', 'model': 9800, 'site': 'site-a', 'rack': 'rack1', 'os_ver': 16.6, 'mgmt_ips': ['10.3.3.1', '10.3.3.2']}
+>>> 
+>>> device_info[1]
+{'device_ip': '10.2.3.4', 'model': 9800, 'site': 'site-a', 'rack': 'rack1', 'os_ver': 16.6, 'mgmt_ips': ['10.3.3.1', '10.3.3.2']}
+>>> 
+>>> device_info[2]
+{'device_ip': '10.2.3.4', 'model': 9800, 'site': 'site-a', 'rack': 'rack1', 'os_ver': 16.6, 'mgmt_ips': ['10.3.3.1', '10.3.3.2']}
+>>> 
+>>> for data in device_info:
+...     print(data)
+... 
+{'device_ip': '10.2.3.4', 'model': 9800, 'site': 'site-a', 'rack': 'rack1', 'os_ver': 16.6, 'mgmt_ips': ['10.3.3.1', '10.3.3.2']}
+{'device_ip': '10.2.3.4', 'model': 9800, 'site': 'site-a', 'rack': 'rack1', 'os_ver': 16.6, 'mgmt_ips': ['10.3.3.1', '10.3.3.2']}
+{'device_ip': '10.2.3.4', 'model': 9800, 'site': 'site-a', 'rack': 'rack1', 'os_ver': 16.6, 'mgmt_ips': ['10.3.3.1', '10.3.3.2']}
+>>> 
+>>> 
+>>> for data in device_info:
+...     print(data.items())
+... 
+dict_items([('device_ip', '10.2.3.4'), ('model', 9800), ('site', 'site-a'), ('rack', 'rack1'), ('os_ver', 16.6), ('mgmt_ips', ['10.3.3.1', '10.3.3.2'])])
+dict_items([('device_ip', '10.2.3.4'), ('model', 9800), ('site', 'site-a'), ('rack', 'rack1'), ('os_ver', 16.6), ('mgmt_ips', ['10.3.3.1', '10.3.3.2'])])
+dict_items([('device_ip', '10.2.3.4'), ('model', 9800), ('site', 'site-a'), ('rack', 'rack1'), ('os_ver', 16.6), ('mgmt_ips', ['10.3.3.1', '10.3.3.2'])])
+>>> 
+>>> for data in device_info:
+...     print(data.keys())
+... 
+dict_keys(['device_ip', 'model', 'site', 'rack', 'os_ver', 'mgmt_ips'])
+dict_keys(['device_ip', 'model', 'site', 'rack', 'os_ver', 'mgmt_ips'])
+dict_keys(['device_ip', 'model', 'site', 'rack', 'os_ver', 'mgmt_ips'])
+>>> 
+>>> for data in device_info:
+...     print(data.values())
+... 
+dict_values(['10.2.3.4', 9800, 'site-a', 'rack1', 16.6, ['10.3.3.1', '10.3.3.2']])
+dict_values(['10.2.3.4', 9800, 'site-a', 'rack1', 16.6, ['10.3.3.1', '10.3.3.2']])
+dict_values(['10.2.3.4', 9800, 'site-a', 'rack1', 16.6, ['10.3.3.1', '10.3.3.2']])
+>>> 
+>>> for data in device_info:
+...     print(data.items())
+... 
+dict_items([('device_ip', '10.2.3.4'), ('model', 9800), ('site', 'site-a'), ('rack', 'rack1'), ('os_ver', 16.6), ('mgmt_ips', ['10.3.3.1', '10.3.3.2'])])
+dict_items([('device_ip', '10.2.3.4'), ('model', 9800), ('site', 'site-a'), ('rack', 'rack1'), ('os_ver', 16.6), ('mgmt_ips', ['10.3.3.1', '10.3.3.2'])])
+dict_items([('device_ip', '10.2.3.4'), ('model', 9800), ('site', 'site-a'), ('rack', 'rack1'), ('os_ver', 16.6), ('mgmt_ips', ['10.3.3.1', '10.3.3.2'])])
+>>> 
+>>> 
+>>> 
+>>> 
+>>> new_device_info = [{ "device_ip": "10.2.3.4", "model": 9800, "site": "site-a", "rack": "rack1", "os_ver": 16.6,]
+ips": ["10.3.3.1", "10.3.3.2"]}  File "<stdin>", line 1
+    new_device_info = [{ "device_ip": "10.2.3.4", "model": 9800, "site": "site-a", "rack": "rack1", "os_ver": 16.6,]
+                                                                                                                   ^
+SyntaxError: closing parenthesis ']' does not match opening parenthesis '{'
+>>>  "mgmt_ips": ["10.3.3.1", "10.3.3.2"]}
+  File "<stdin>", line 1
+    "mgmt_ips": ["10.3.3.1", "10.3.3.2"]}
+IndentationError: unexpected indent
+>>> new_device_info = [{ "device_ip": "10.2.3.4", "model": 9800, "site": "site-a", "rack": "rack1", "os_ver": 16.6,], { "device_ip": "10.2.3.4", "model": 9800, "site": "site-a", "rack": "rack1", "os_ver": 16.6,]
+  File "<stdin>", line 1
+    new_device_info = [{ "device_ip": "10.2.3.4", "model": 9800, "site": "site-a", "rack": "rack1", "os_ver": 16.6,], { "device_ip": "10.2.3.4", "model": 9800, "site": "site-a", "rack": "rack1", "os_ver": 16.6,]
+                                                                                                                   ^
+SyntaxError: closing parenthesis ']' does not match opening parenthesis '{'
+>>> new_device_info = [{ "device_ip": "10.2.3.4", "model": 9800, "site": "site-a", "rack": "rack1", "os_ver": 16.6,], { "device_ip": "10.2.3.4", "model": 9800, "site": "site-a", "rack": "rack1", "os_ver": 16.6,]
+  File "<stdin>", line 1
+    new_device_info = [{ "device_ip": "10.2.3.4", "model": 9800, "site": "site-a", "rack": "rack1", "os_ver": 16.6,], { "device_ip": "10.2.3.4", "model": 9800, "site": "site-a", "rack": "rack1", "os_ver": 16.6,]
+                                                                                                                   ^
+SyntaxError: closing parenthesis ']' does not match opening parenthesis '{'
+>>> 
+>>> 
+>>> dir(dict)
+['__class__', '__class_getitem__', '__contains__', '__delattr__', '__delitem__', '__dir__', '__doc__', '__eq__', '__format__', '__ge__', '__getattribute__', '__getitem__', '__gt__', '__hash__', '__init__', '__init_subclass__', '__ior__', '__iter__', '__le__', '__len__', '__lt__', '__ne__', '__new__', '__or__', '__reduce__', '__reduce_ex__', '__repr__', '__reversed__', '__ror__', '__setattr__', '__setitem__', '__sizeof__', '__str__', '__subclasshook__', 'clear', 'copy', 'fromkeys', 'get', 'items', 'keys', 'pop', 'popitem', 'setdefault', 'update', 'values']
+>>> 
+>>> 

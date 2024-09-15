@@ -1,0 +1,16 @@
+---
+bgp_conf:
+        R1:
+          - 100
+          - - neighbor_ip: 10.1.1.2
+              remote_as: 200
+        R2:
+          - 200
+          - - neighbor_ip: 10.1.1.1
+              remote_as: 100
+            - neighbor_ip: 10.1.1.6
+              remote_as: 300
+        R3:
+          - 300
+          - - neighbor_ip: 10.1.1.5
+              remote_as: 200
