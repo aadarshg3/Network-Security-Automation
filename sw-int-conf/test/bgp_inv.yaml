@@ -1,11 +1,13 @@
 ---
-- device_type: "cisco_ios"
+- interface: "eth1/0"
   host: "192.168.1.212"
   hostname: "R1"
-- device_type: "cisco_ios"
+- interface: "eth1/0"
   host: "192.168.1.213"
   hostname: "R2"
-- device_type: "cisco_ios"
+- interface: "eth1/0"
   host: "192.168.1.214"
   hostname: "R3"
+
+
 

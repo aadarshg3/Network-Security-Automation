@@ -1,8 +1,10 @@
+# NAPALM stands for Network Automation and Programmability Abstraction Layer with Multivendor support
+
 from napalm import get_network_driver
 
 # Define device credentials and details
 device_details = {
-    "hostname": "192.168.1.212",  # Replace with the actual router IP
+    "hostname": "192.168.1.200",  # Replace with the actual router IP
     "username": "netg",        # Replace with your router's username
     "password": "netg",     # Replace with your router's password
     "optional_args": {},        # Any optional arguments (e.g., port, secret for enable mode)

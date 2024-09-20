@@ -1,0 +1,13 @@
+---
+bgp_conf:
+        R1:
+          - 100
+          - neighbor_ip: 10.1.1.2
+          - remote_as: 200
+
+
+
+
+
+# bgp_config : {"R1": [100, {"neighbor_ip": "10.1.1.2"}, {"remote_as": 200}]}              
+

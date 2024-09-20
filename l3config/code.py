@@ -18,6 +18,9 @@ template = env.get_template("template.j2")
 user = os.getenv('USERNAME')
 user_password = os.getenv('PASSWORD')
 
+# export USERNAME='your_username'  ===> run this on linux
+# export PASSWORD='your_password'  ===> run this on linux
+
 for device in devices:
     # Render the template with the data
     rendered_output = template.render(conf_data=data["bgp_conf"][device["hostname"]])
@@ -36,3 +39,4 @@ for device in devices:
     # Disconnect from the device
     net_connect.disconnect()
     print("Disconnected from the device.")
+

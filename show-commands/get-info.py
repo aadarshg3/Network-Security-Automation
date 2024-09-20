@@ -1,7 +1,7 @@
 import yaml
 from jinja2 import Environment, FileSystemLoader
 from netmiko import ConnectHandler
-
+from napalm import get_network_driver
 
 
 # yaml_file = open("test.yaml", "w")
