@@ -14,4 +14,6 @@ dict_data = {
 # print(dict_data["data22"][1])
 # print(dict_data.get("data22")[1])
 # print(dict_data["data4"][1]["b"])
+
+print(dict_data["data3"]["key2"][3][1][1]["c"][2])
 print(dict_data["data4"][1]["b"]["key2"][4])
