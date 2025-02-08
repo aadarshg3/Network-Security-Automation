@@ -1,0 +1,17 @@
+dict_data = {
+    "data1": "This is second class for dictionary",
+    "data2": ["Ravi", "Prince", 10, [ {"a": "a1"}, {"b": "b22"}, {"c": "c1"}], 200, 20.3],
+    "data3": {"key1": "Hello World 1",
+              "key2": ["Ravi", "Prince", 10, [ {"a": "a1"}, [ {"b": "b22"}, {"c": [1,2,3,4]}]], 200, 20.3],
+              },
+    "data4": [{"a": "a1"}, {"b": {"key1": "Hello World 1",
+              "key2": ["Ravi", "Prince", 10, [ {"a": "a1"}, [ {"b": "b22"}, {"c": [1,2,3,4]}]], 2000, 20.3],
+              "key3": "Hello World 3",
+              }}, {"c": "c1"}],
+    
+}
+
+# print(dict_data["data22"][1])
+# print(dict_data.get("data22")[1])
+# print(dict_data["data4"][1]["b"])
+print(dict_data["data4"][1]["b"]["key2"][4])
