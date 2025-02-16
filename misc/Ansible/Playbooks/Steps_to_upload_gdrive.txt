@@ -1,0 +1,117 @@
+Step-by-Step Summary
+a. Go to the Google Developers Console
+Open your web browser and go to Google Developers Console(https://console.cloud.google.com/cloud-resource-manager).
+If you are not already signed in, sign in with your Google account.
+
+1. Create a Google Cloud Project
+Go to the Google Cloud Console: Google Cloud Console
+Create a new project:
+Click on the project drop-down and select New Project.
+Give it a name (e.g., "NetworkingAutomation") and click Create.
+2. Enable the Google Drive API
+Navigate to the API & Services section.
+Click Enable APIs and Services.
+Search for Google Drive API and enable it for your project.
+3. Create a Service Account
+Go to the IAM & Admin section in Google Cloud Console.
+Select Service Accounts and click Create Service Account.
+Enter the service account name (e.g., drive-upload-service).
+Grant the "Editor" role for simplicity or customize based on requirements.
+After creating the service account, click on the service account and then Add Key.
+Choose JSON format for the key and download it.
+The downloaded file is your service account credentials (e.g., service_account.json).
+4. Share Google Drive Folder with the Service Account
+Create a folder in Google Drive where you want to upload files.
+Right-click on the folder and select Get link.
+Change the sharing settings to Anyone with the link (or customize as needed).
+Under Share, add the Service Account email (the email associated with the service account you created earlier).
+5. Install Required Python Libraries
+Install the necessary Python libraries:
+
+bash
+pip install google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib
+
+
+6. Python Script to Upload Files to Google Drive
+
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+
+# SCOPES required for file upload
+SCOPES = ['https://www.googleapis.com/auth/drive.file']
+
+def upload_to_google_drive(output_file, file_name):
+    # Load credentials from the service account file
+    creds = service_account.Credentials.from_service_account_file(
+        '/path/to/service_account.json',
+        scopes=SCOPES
+    )
+
+    # Build the Drive API client
+    drive_service = build('drive', 'v3', credentials=creds)
+
+    # Folder ID where the file will be uploaded
+    folder_id = 'YOUR_FOLDER_ID'
+
+    # Metadata for the file, specifying the folder ID
+    file_metadata = {
+        'name': file_name,
+        'parents': [folder_id]
+    }
+
+    # Upload the file using MediaFileUpload
+    media = MediaFileUpload(output_file, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+    # Create and upload the file
+    file = drive_service.files().create(
+        media_body=media,
+        body=file_metadata,
+    ).execute()
+
+    # Corrected print statement
+    print(f"File uploaded successfully with ID: {file['id']}")
+
+# Call the function to upload the file
+upload_to_google_drive('path_to_your_file/switch_interfaces_report.xlsx', 'switch_interfaces_report.xlsx')
+
+Replace /path/to/service_account.json with the path to the service account credentials file.
+Replace YOUR_FOLDER_ID with the actual folder ID from your Google Drive folder's URL.
+
+7. Testing the Python Script
+Run the script in your local environment to check if the file uploads to the correct Google Drive folder:
+python3 upload_to_google_drive.py
+
+8. Automate the Script with Ansible Playbook
+To automate the file upload process, you can create an Ansible playbook that executes the Python script.
+
+Ansible Playbook Example (upload_file_to_google_drive.yml):
+
+yaml
+Copy code
+---
+- name: Upload file to Google Drive
+  hosts: localhost
+  tasks:
+    - name: Execute Python script to upload the file to Google Drive
+      command: python3 /path/to/your/upload_to_google_drive.py
+      register: result
+    
+    - name: Show upload result
+      debug:
+        msg: "{{ result.stdout }}"
+
+
+9. Final Validation
+After running the playbook or script, verify the file upload in your Google Drive folder.
+Ensure the file is in the correct folder and check if the file name matches the one you uploaded.
+
+Conclusion
+The following steps were taken to achieve the file upload process to Google Drive:
+
+Created a Google Cloud project and enabled the Google Drive API.
+Set up a service account and downloaded the JSON credentials file.
+Shared the Google Drive folder with the service account email.
+Wrote a Python script to upload files to Google Drive using the service account.
+Executed the script to confirm successful file upload.
+Automated the process using an Ansible playbook.

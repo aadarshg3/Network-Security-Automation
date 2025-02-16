@@ -1,0 +1,92 @@
+# Playbook Description:
+# This playbook demonstrates basic variable management and conditional printing for network devices.
+# It allows setting device type and a list of devices dynamically via extra variables.
+
+---
+- name: Play A
+  hosts: localhost
+  gather_facts: false
+  vars:
+    device_type: "{{ r_v }}"
+    devices: "{{ device_list }}"
+    # devices:
+    #   - "{{ R1 }}"
+    #   - "{{ R2 }}"
+    #   - "{{ R3 }}"
+    # device_creds:
+    #   username: "USER-ABC"
+    #   Password: "PASS-ABC"
+    
+    models: "{{models_list}}"
+    # models:
+    #   - Router: "7200"
+    #     Vendor: "Cisco"
+    #   - switch: "3850"
+    #     Vendor: "Arista"
+    #   - Firewall: "FG100D"
+    #     Vendor: "Fortigate"
+    
+    # ip: " 10.20.30.40 "
+    # ip_list:
+    #   - " 10.20.30.40 "
+    #   - " 20.30.40.50 "
+    #   - " 30.40.50.60 "
+
+  tasks:
+    - name: " 01 - PRINTING DEVICE TYPE "
+      debug:
+        # var: "device_type"
+        #Run below in command line
+        # Usage: ansible-playbook managing_variables.yaml -e "r_v=Router"
+        # Usage: ansible-playbook managing_variables.yaml -e "r_v=switch"
+        #msg: "{{ device_type }}"
+        #for line 9 run below
+        # Usage: ansible-playbook managing_variables.yaml -e "r_v=switch R1=Router1 R2=Router2 R3=Router3"
+
+    # - name: " 02 - PRINTING DEVICE DATA "
+    #   debug:
+    #     #var: "devices"
+    #     var: "device_list"
+        #var: "device_list[1]"
+
+      #for line 8 run below:
+      # Usage: ansible-playbook managing_variables.yaml -e '{"device_list":["Ro1", "Ro2", "Ro3"]}'
+      # Line 41 is printing hello world while commenting all items in debug for task 01 ??
+      #uncomment line 7,26 & 37 and run below
+      # Usage: ansible-playbook managing_variables.yaml -e "r_v=Switch device_list=\"['Ro1', 'Ro2', 'Ro3']\""
+    
+    # - name: " 02-A PRINTING EACH ITEM IN LIST "
+    #   debug:
+    #     #msg: "{{ item }}"
+    #     var: "item"
+    #     # var : "Data"
+    #   loop: "{{ device_list }}"
+    #   # loop: "{{ devices }}"
+    #   #print on conditions
+    #   #when: item == 'Ro2'
+    #   when: item == 'Ro2' or item == 'Ro3'
+
+      # Usage: ansible-playbook managing_variables.yaml -e '{"device_list":["Ro1", "Ro2", "Ro3"]}'
+      # Usage: ansible-playbook managing_variables.yaml -e "r_v=Switch device_list=\"['Ro1', 'Ro2', 'Ro3']\""
+  
+
+    # - name: " 03 - PRINTING DEVICE CREDS "
+    #   debug:
+    #     var: "device_creds"
+
+    - name: " 04- PRINTING DEVICE MODELS AND VENDORS"
+      debug: 
+        var: "item"
+      #loop: "{{ models }}"
+      # when: item["Vendor"] == "Arista" 
+      when: item["Vendor"] != "Arista"
+      loop: "{{ models_list }}"
+    # Usage: ansible-playbook managing_variables.yaml -e ''{"device_list": [{"Router": "7200", "Vendor": "Cisco"}, {"switch": "3850", "Vendor": "Arista"}, {"Firewall": "FG100D", "Vendor": "Fortigate"}]}' 
+
+
+    # - name: "04 - PRINTING DEVICE IP"
+    #   debug:
+    #     #var: "ip"
+    #     #var: "ip_list"
+
+        

@@ -1,0 +1,77 @@
+https://www.linuxtechi.com/install-ansible-awx-on-ubuntu/
+
+1) Install Required Packages
+Log in to your Ubuntu system and install following required packages
+
+$ sudo apt install git make -y
+
+2) Start minikube cluster
+It is recommended to start the Minikube cluster with 4 CPUs and 8 GB of RAM. If resources are lower than this, the pods may take longer to initialize.
+$ minikube start --vm-driver=docker --addons=ingress
+
+Execute beneath commands to verify minikube and pods status
+
+$ minikube status
+$ kubectl get pods -A
+
+3) Deploy Ansible AWX via Operator
+Use following git clone command to get AWX operator,
+
+$ git clone https://github.com/ansible/awx-operator.git
+$ cd awx-operator/
+$ git checkout 2.19.0
+
+$ export NAMESPACE=ansible-awx
+$ make deploy
+
+$ kubectl get pods -n ansible-awx
+
+Now, copy awx demo file with the name ‘awx-ubuntu.yml’
+
+$ cp awx-demo.yml awx-ubuntu.yml
+
+Edit this file using vi editor, change the name from awx-demo to awx-ubuntu.
+
+$ vi awx-ubuntu.yml
+---
+apiVersion: awx.ansible.com/v1beta1
+kind: AWX
+metadata:
+  name: awx-ubuntu
+spec:
+  service_type: nodeport
+
+Deploy AWX using following kubectlc command,
+
+$ kubectl create -f awx-ubuntu.yml -n ansible-awx
+awx.awx.ansible.com/awx-ubuntu created
+$
+
+Monitor pods and service status of ansible-awx namespace,
+$ kubectl get pods -n ansible-awx
+$ kubectl get svc -n ansible-awx
+
+You can track the installation for AWX from the deployment,
+$ kubectl logs -f deployments/awx-operator-controller-manager -c awx-manager -n ansible-awx
+
+4) Access AWX Dashboard
+To access the dashboard from Ubuntu system itself, run following command to get dashboard url,
+
+$ minikube service awx-ubuntu-service --url -n ansible-awx
+http://192.168.49.2:30770
+$
+In case, you are trying to access outside of your Ubuntu system then run following kubectl command,
+
+$ kubectl port-forward service/awx-ubuntu-service -n ansible-awx --address 0.0.0.0 10445:80 &> /dev/null &
+AWX POD Forwarding Ubuntu 24.04
+
+Open the web browser, type following URL
+
+http://<Your-Ubuntu-IP-Address>:10445
+
+To retrieve admin user password, run the following kubectl command,
+
+$ kubectl get secret -n ansible-awx | grep -i password
+$ kubectl get secret awx-ubuntu-admin-password -o jsonpath="{.data.password}" -n ansible-awx | base64 --decode; echo
+4zzsWN4fYJxgidx6cSiYJq3vrPSK6JHR
+$

@@ -1,0 +1,41 @@
+# ansible-playbook playing_with_variables.yaml -e "nts=Switch device_list=\"['Router1', 'Router2', 'Router3']\""
+# ansible-playbook playing_with_variables.yaml  -e '{"device_list":["R1", "R2", "R3"]}'
+
+---
+- name: Play A
+  hosts: localhost
+  gather_facts: false
+  vars:
+    device_type: "{{ nts }}"
+    # devices: 
+    #   - "{{ R1 }}"
+    #   - "{{ R2 }}"
+    #   - "{{ R3 }}"
+    # devices: "{{ device_list }}"
+    device_creds:
+      user_name: "NetG"
+      password: "India" 
+
+  tasks:
+
+    - name: "1010 - OUTPUT DEVICE TYPE"
+      debug:
+        msg: "{{ nts }}"
+
+    # - name: "1010 - OUTPUT DEVICE TYPE"
+    #   debug:
+    #     var: device_list
+
+    - name: Print each item in the list
+      debug:
+        msg: "{{ item }}"
+      loop: "{{ device_list }}"
+      when: item == 'Router2'
+
+    # - name: "1020 - OUTPUT DEVICES DATA"
+    #   debug:
+    #     var: "devices"
+
+    - name: "1030 - OUTPUT DEVICES CREDS"
+      debug:
+        var: "device_creds"

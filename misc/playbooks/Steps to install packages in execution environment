@@ -1,0 +1,24 @@
+current execution environment does not have ansible collection installed so we need to follow these steps
+
+1- create another directory in /awx-operator
+mkdir custom-ee
+cd custom-ee
+ nano Dockerfile
+FROM quay.io/ansible/awx-ee:24.6.0
+
+# Install Python and pip
+USER root
+RUN yum install -y python3 python3-pip
+
+# Install Ansible
+RUN pip3 install ansible
+
+# Install the cisco.ios collection
+RUN ansible-galaxy collection install cisco.ios
+
+
+docker build -t my-custom-awx-ee:latest
+docker login
+docker tag my-custom-awx-ee:latest your-docker-hub-username/my-custom-awx-ee:latest
+docker push your-docker-hub-username/my-custom-awx-ee:latest
+once done create a new execution environment and use the environment in all projects and files

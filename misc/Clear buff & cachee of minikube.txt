@@ -1,0 +1,172 @@
+Steps to Set Up the Cache Clearing Script
+Create the Script:
+
+Open the terminal and create the script:
+
+sh
+nano /home/rahulverma/clear_cache.sh
+Add the following content to the script:
+
+sh
+#!/bin/bash
+LOG_FILE="/home/rahulverma/clear_cache.log"
+echo "Attempting to clear caches..." >> $LOG_FILE
+sudo sync
+echo 3 | sudo tee /proc/sys/vm/drop_caches
+echo "Cache cleared at $(date)" >> $LOG_FILE
+Save and exit the editor (CTRL + X, then Y, and press ENTER).
+
+Make the Script Executable:
+
+sh
+chmod +x /home/rahulverma/clear_cache.sh
+Allow the Script to Run Without Password:
+
+Edit the sudoers file:
+
+sh
+sudo visudo
+Add the following line at the end of the file:
+
+sh
+rahulverma ALL=(ALL) NOPASSWD: /home/rahulverma/clear_cache.sh
+Create a Cron Job:
+
+Open the crontab editor:
+
+sh
+crontab -e
+Add the following line to schedule the script to run every 2 minutes:
+
+sh
+*/2 * * * * /home/rahulverma/clear_cache.sh
+Steps to Verify the Script is Running Automatically
+Check the Script's Log File:
+
+Monitor the log file to see if new entries are being added every 2 minutes:
+
+sh
+tail -f /home/rahulverma/clear_cache.log
+Check Cron Logs:
+
+Inspect the cron logs to see entries related to your script:
+
+sh
+sudo grep CRON /var/log/syslog
+Check Cron Service Status:
+
+Ensure the cron service is running:
+
+sh
+sudo systemctl status 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Steps to Automate Cache Clearing in Minikube
+1. Access Minikube via SSH
+Open your terminal and SSH into Minikube:
+bash
+Copy
+Edit
+minikube ssh
+2. Create the Cache Clearing Script
+Inside Minikube, create a shell script (clear_cache.sh):
+bash
+Copy
+Edit
+nano clear_cache.sh
+Add the following content to the script:
+bash
+Copy
+Edit
+#!/bin/bash
+
+echo "Attempting to clear caches..."
+sudo sync
+echo 3 | sudo tee /proc/sys/vm/drop_caches
+echo "Cache cleared."
+Save and exit the editor (CTRL + X, then Y, and press ENTER).
+3. Make the Script Executable
+Ensure the script has executable permissions:
+bash
+Copy
+Edit
+chmod +x /home/docker/clear_cache.sh
+4. Run the Script Manually
+Test the script by running it manually:
+bash
+Copy
+Edit
+./clear_cache.sh
+The output should confirm the cache clearing:
+css
+Copy
+Edit
+Attempting to clear caches...
+Cache cleared.
+5. Schedule the Script with Cron
+To automate the script, open the crontab editor:
+bash
+Copy
+Edit
+crontab -e
+Add the following line to schedule the script to run every 2 minutes:
+bash
+Copy
+Edit
+*/2 * * * * /home/docker/clear_cache.sh > /home/docker/clear_cache.log 2>&1
+Save and exit the crontab editor (CTRL + X, then Y, and press ENTER).
+6. Check the Cron Service Status
+Ensure the cron service is active and running:
+bash
+Copy
+Edit
+sudo service cron status
+If the cron service is not running, start it with:
+bash
+Copy
+Edit
+sudo service cron start
+7. Monitor Cron Job Execution (Optional)
+If the cron job is not running as expected, check the system logs:
+bash
+Copy
+Edit
+grep CRON /var/log/syslog
+8. Verify Script Execution
+After the cron job runs, check the log file to confirm the cache was cleared:
+bash
+Copy
+Edit
+tail -f /home/docker/clear_cache.log
+9. Monitor Cache Usage
+You can monitor system memory usage to ensure the cache is cleared:
+bash
+Copy
+Edit
+free -h
+Summary:
+Create the script (clear_cache.sh) to clear the system cache.
+Make the script executable (chmod +x).
+Test the script manually to ensure it works as expected.
+Schedule the script with cron to run periodically (every 2 minutes).
+Ensure the cron service is active and running (sudo service cron status).
+Monitor logs to verify cron execution and cache clearing (tail -f /home/docker/clear_cache.log).
+Check memory usage to confirm cache clearance (free -h).
