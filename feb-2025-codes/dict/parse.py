@@ -629,4 +629,5 @@ mydata = {
 }
 
 # print(mydata.keys())
-print(mydata['Parameters']['PublicSubnet1ID'])
+print(mydata['Resources']["AWXStack"].keys())
+# print(mydata.values())
