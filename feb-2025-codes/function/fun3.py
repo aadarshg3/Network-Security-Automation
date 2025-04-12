@@ -1,15 +1,18 @@
-def shout(text):
-    return text.upper()
+import json
+import csv
 
+# Sample JSON data
+json_data = {
+  "Name": "Aadarsh",
+  "Age": 28,
+  "Location": "Delhi"
+}
 
-def greet_decorator(func):
-    def wrapper():
-        result = func()
-        return f"Modified: {result}"
-    return wrapper
+# Write to CSV where keys are rows
+with open ('output.csv', 'w', newline='') as file:
+    writer = csv.writer(file)
+    writer.writerow(["Key", "Value"])
+    for k, v in json_data.items():
+        writer.writerow([k, v])
 
-def say_hello():
-    return "Hello World!"
-
-decorated = greet_decorator(say_hello)
-print(decorated())
+print("CSV file created successfully")
