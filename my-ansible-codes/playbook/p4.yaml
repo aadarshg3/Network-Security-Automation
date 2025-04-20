@@ -1,0 +1,35 @@
+---
+# this is a simple playbook with 2 plays
+
+- name: First Play
+  hosts: servera
+  become: true
+  tasks:
+    - name: Install APACHE HTTPD
+      ansible.builtin.dnf:
+        name: httpd
+        state: present
+    
+    - name: Enable Apache Service
+      ansible.builtin.service:
+        name: httpd
+        state: started
+        enabled: yes
+
+
+- name: Second Play
+  hosts: serverb
+  become: true
+  tasks:
+    - name: Install MariaDB on serverb
+      ansible.builtin.dnf:
+        name: mariadb-server
+        state: present
+        
+    - name: Enable MariaDB Service
+      ansible.builtin.service:
+        name: mariadb.service 
+        state: started
+        enabled: yes
+
+

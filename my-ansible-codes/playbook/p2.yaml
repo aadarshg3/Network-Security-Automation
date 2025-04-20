@@ -21,9 +21,9 @@
   hosts: serverb
   gather_facts: false
   tasks: 
-    - name: creating an user ram on serverb
+    - name: creating an user mohan on serverb
       ansible.builtin.user:
-        name: ram
+        name: mohan
         state: present
         group: wheel
 
