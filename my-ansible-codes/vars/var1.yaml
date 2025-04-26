@@ -1,0 +1,6 @@
+- name: Example of vars in playbook
+  hosts: node1
+  vars: 
+    webroot: /var/www/html
+      
+      
