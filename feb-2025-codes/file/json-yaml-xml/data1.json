@@ -1,0 +1,10 @@
+{
+    "devices": [
+      {
+        "hostname": "r1",
+        "ip": "192.168.1.1",
+        "model": null,
+        "reachable": true
+      }
+    ]
+  }  

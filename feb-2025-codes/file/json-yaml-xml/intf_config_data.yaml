@@ -1,0 +1,6 @@
+---
+intf: ge0/10
+desc: connected to user port10
+speed: 1000
+duplex: full
+

@@ -1,0 +1,3 @@
+[console_scripts]
+pyntc=pyntc.cli:main
+
