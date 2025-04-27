@@ -137,13 +137,7 @@ NA
 
 ## Contact
 
-For any questions or inquiries about this project, feel free to reach out to me at [your-email@example.com].
+For any questions or inquiries about this project, feel free to reach out to me at [aadarshg3@gmail.com].
 
 ---
 
-### Notes:
-- **Change `your-email@example.com`** to your actual contact email.
-- Adjust the usage examples based on the actual playbooks, Python modules, and Terraform scripts you have.
-- If your project includes additional configuration files, you can list them in the **Project Structure** section.
-
-Let me know if you need any further customizations!
