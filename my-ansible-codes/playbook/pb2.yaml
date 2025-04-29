@@ -1,0 +1,44 @@
+---
+- hosts: serverb
+  vars_prompt:
+    
+    - name: username
+      prompt: What is your username?
+      private: no
+
+    
+    - name: password
+      prompt: What is your password
+      private: yes  # by def this is yes
+
+    - name: my_password2
+      prompt: Enter password2
+      private: yes
+      encrypt: sha512_crypt
+      confirm: yes
+      salt_size: 7
+  
+  tasks: 
+    - name: Print a message
+      ansible.builtin.debug:
+        msg: "logging in as {{ username }}"
+
+
+        
+#---
+#- hosts: serverb
+#  vars_prompt:
+#    
+#    - name: username
+#      prompt: What is your username?
+#      private: no
+#
+#    
+#    - name: password
+#      prompt: What is your password
+#      private: yes  # by def this is yes
+#
+#  tasks: 
+#    - name: Print a message
+#      ansible.builtin.debug:
+#        msg: "logging in as {{ username }}"

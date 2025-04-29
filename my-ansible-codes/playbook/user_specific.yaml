@@ -1,0 +1,8 @@
+---
+- name: adding user with specific value
+  hosts: all
+  tasks:
+    - name: adding user on all hosts
+      user:
+        name: "{{ specific_user }}"
+        state: present

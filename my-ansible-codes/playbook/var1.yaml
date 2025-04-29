@@ -1,0 +1,8 @@
+- name: example if command line
+  hosts: servera
+  tasks: 
+    - name: add user and apply password
+      ansible.builtin.user:
+        name: "{{ username }}"
+        password: "{{ mypass|grep  }}"
+
