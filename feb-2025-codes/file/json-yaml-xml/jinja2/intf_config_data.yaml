@@ -1,0 +1,14 @@
+- intf: GigabitEthernet1
+  desc: Uplink to Core Switch
+  speed: 1000
+  duplex: full
+
+- intf: GigabitEthernet2
+  desc: Connection to Server
+  speed: 1000
+  duplex: full
+
+- intf: GigabitEthernet3
+  desc: Uplink to Core Switch
+  speed: 1000
+  duplex: full

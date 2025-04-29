@@ -1,0 +1,6 @@
+PyYAML
+lxml
+Jinja2
+napalm
+netmiko
+pyntc
