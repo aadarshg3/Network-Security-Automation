@@ -38,3 +38,4 @@ else:
                 print(f"The IP address {ip} is a Private IP.")
             else:
                 print(f"The IP address {ip} is a Public IP.")
+
