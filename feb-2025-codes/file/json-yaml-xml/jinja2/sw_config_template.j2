@@ -1,9 +1,8 @@
-interface {{}}
-description {{}}
-speed {{}}
-duplex {{}}
-
-
-
-
+{% for data in data_list -%}
+!
+interface {{ data["intf"] }}
+ description {{ data["desc"] }}
+ speed {{ data["speed"] }}
+ duplex {{ data["duplex"] }}
+{% endfor %}
 
