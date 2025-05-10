@@ -15,7 +15,7 @@ cisco_router = {
 
 with open("bgpconfig-data.yaml", "r") as yaml_file:
     bgpconfig = yaml.safe_load(yaml_file)
-# print(bgpconfig)
+print(bgpconfig)
     
 # env = Environment(FileSystemLoader(searchpath=(".")))
 # =====>>>> line 9 & 10 are same as 12

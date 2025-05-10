@@ -1,0 +1,12 @@
+---
+- name: Gather facts from Cisco routers
+  hosts: cisco
+  gather_facts: no  # We use ios_facts, not default (Linux) setup
+  tasks:
+    - name: Collect device facts
+      cisco.ios.ios_facts:
+
+    - name: Print hostname from gathered facts
+      debug:
+        var: ansible_net_hostname
+
