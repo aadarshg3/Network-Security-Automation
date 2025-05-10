@@ -1,0 +1,26 @@
+---
+- hosts: localhost
+  become: true
+  tasks:
+    - name: add user
+      user:
+        name: ram
+        state: present
+
+        
+    - name: add user
+      user:
+        name: shyam
+        state: present
+
+        
+    - name: add user
+      user:
+        name: krishna
+        state: present
+
+
+
+# for creating a user, you need to write 10 tasks for 10 users. this can be automated using loop using keyword: loop.
+# due to os limitation, you can not create multiple users in a single go.
+# can be done using loop.

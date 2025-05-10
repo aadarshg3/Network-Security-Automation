@@ -1,0 +1,13 @@
+- hosts: all
+  tasks:
+    - name: check the python version 
+      command: python --version
+      register: xyz
+
+    - debug: 
+        var: xyz
+
+    - name: store the output in /tmp/pyton-version
+      copy:
+        content: "python version is: {{ xyz[ 'stdout' ]}}" 
+        dest: /tmp/python-version

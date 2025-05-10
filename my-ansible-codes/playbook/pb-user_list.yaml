@@ -1,0 +1,12 @@
+---
+myusers:
+- ravi
+- neha
+- manish
+- jeff
+- mac
+
+mygroups:
+- staff
+- guest
+- manager
