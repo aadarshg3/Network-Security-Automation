@@ -1,13 +1,13 @@
 devices:
   - device_type: "cisco_ios"
-    host: "192.168.199.157"
+    host: "192.168.199.132"
     hostname: "SW1"
 
   - device_type: "cisco_ios"
-    host: "192.168.199.164"
+    host: "192.168.199.133"
     hostname: "SW2"
 
   - device_type: "cisco_ios"
-    host: " 192.168.199.163"
+    host: " 192.168.199.134"
     hostname: "SW3"
 
