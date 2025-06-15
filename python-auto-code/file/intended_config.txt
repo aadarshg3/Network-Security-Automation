@@ -1,0 +1,16 @@
+interface Gigabit0/1
+description Connected to server-1
+speed 1000
+duplex full
+interface Gigabit0/2
+description Connected to server-2
+speed 1000
+duplex full
+interface Gigabit0/3
+description Connected to server-3
+speed 1000
+duplex full
+interface Gigabit0/4
+description Connected to server-4
+speed 1000
+duplex full
