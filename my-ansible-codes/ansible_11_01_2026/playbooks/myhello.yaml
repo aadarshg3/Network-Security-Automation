@@ -1,0 +1,29 @@
+---
+- name: Play A
+  hosts: localhost
+  connection: local
+  # gather_facts: false
+
+  tasks:
+    - name: task 1
+      debug:
+        msg: "Hello Ansible World"
+
+    - name: task 2 
+      debug:  
+        msg: "Testing Task 2"    
+
+- name: Play B
+  hosts: localhost
+  connection: local
+  # gather_facts: false
+
+  tasks:
+    - name: task 10
+      debug:
+        msg: "Testing Task 10"
+        
+    - name: task 20 
+      debug:  
+        msg: "Testing Task 20"    
+

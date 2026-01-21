@@ -1,0 +1,25 @@
+# ANSIBLE-VARIABLE-1 dynamic playbook. 
+
+---
+- name: writing playbook and adding variable
+  hosts: servera
+  vars_files:
+    - /home/aadarsh/ansible/vars/var-value.yaml
+      
+  tasks:
+    - name: adding new group
+      group:
+        name: "{{ group_name }}"
+        state: present
+
+    - name: adding user in servera
+      user:
+        name: "{{ user_name }}"
+        group: "{{ group_name }}"
+        state: present
+
+
+
+
+
+

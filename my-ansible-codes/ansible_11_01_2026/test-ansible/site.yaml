@@ -1,0 +1,5 @@
+---
+- name: Play A
+  hosts: localhost
+  connection: local
+  # gather_facts: false
