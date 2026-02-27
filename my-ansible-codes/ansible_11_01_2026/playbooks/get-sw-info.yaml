@@ -1,6 +1,6 @@
 ---
 - name: Get basic device info
-  hosts: "{{ hostname }}" #switches # network
+  hosts:  switches, routers     #"{{ hostname }}" #switches # network
   gather_facts: false
 
   tasks:
