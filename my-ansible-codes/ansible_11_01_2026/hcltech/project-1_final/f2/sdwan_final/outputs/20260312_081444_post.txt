@@ -1,0 +1,81 @@
+  system
+   device-model          vedge-C8000V
+   host-name             cedge-test-1
+   system-ip             1.1.1.60
+   site-id               60
+   port-offset           1
+   admin-tech-on-failure
+   sp-organization-name  superlab
+   organization-name     superlab
+   device-version        17.16.01a.0.1625
+   console-baud-rate     19200
+   vbond 10.1.1.10 port 12346
+   logging
+    disk
+     enable
+    !
+   !
+  !
+  bfd color lte
+   hello-interval 1000
+   no pmtu-discovery
+   multiplier     1
+  !
+  bfd app-route multiplier 2
+  bfd app-route poll-interval 123400
+  security
+   ipsec
+    authentication-type ah-sha1-hmac sha1-hmac
+    integrity-type      ip-udp-esp esp
+   !
+  !
+  omp
+   no shutdown
+   graceful-restart
+   advertise bgp
+   advertise connected
+   advertise static
+   ipv6-advertise bgp
+   ipv6-advertise connected
+   ipv6-advertise static
+  !
+  vpn 10
+   interface GigabitEthernet2.10
+    ip address 10.10.10.1/24
+    no shutdown
+   !
+  !
+  vpn 20
+   interface GigabitEthernet2.20
+    ip address 10.20.20.1/24
+    no shutdown
+   !
+  !
+  vpn 30
+   router
+    bgp 65001
+     router-id 10.30.30.1
+     neighbor 10.30.30.2
+      no shutdown
+      remote-as 65002
+     !
+    !
+   !
+   interface GigabitEthernet2.30
+    ip address 10.30.30.1/24
+    no shutdown
+   !
+  !
+  aaa
+   server-auth-order local
+   user admin
+    password  $6$wRoUVQ==$Ujj8J/h2llpidWIrhayO.FRiixbJ9LFqVmxIQTMCLFoIRKuQhb.JLPMzEKMybdXz5OYBwgtxQMQsFeI1BbNmJ.
+    secret    $9$3V6L3V6L2VUI2k$ysPnXOdg8RLj9KgMdmfHdSHkdaMmiHzGaUpcqH6pfTo
+    privilege 15
+   !
+  !
+  global
+   services-global services-ip cdp true
+  !
+ !
+!
