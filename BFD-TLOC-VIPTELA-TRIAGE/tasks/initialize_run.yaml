@@ -1,0 +1,47 @@
+---
+- debug: var=iAutomate_INV_WS
+
+- name: "1011 CHECK IF HOST KEY EXISTS FOR DEVICE"
+  local_action:
+    module: command
+    args: ssh-keygen -l -F "{{ ansible_host }}"
+  ignore_errors: true
+  changed_when: no
+  register: host_registered
+
+- name: "1012 TRUST THE NEW HOST FOR DEVICE"
+  local_action:
+    module: shell
+    args: ssh-keyscan -H "{{ ansible_host }}" >> $HOME/.ssh/known_hosts
+  when: host_registered.rc > 0
+  ignore_errors: true
+
+- name: "1013 CREATE OUTPUT DIRECTORY"
+  file:
+    path: "{{ output_dir }}"
+    state: directory
+    mode: '0755'
+  delegate_to: localhost
+
+- name: "1014 CREATE OUTPUT.DAT FILE"
+  lineinfile:
+    path: "{{ output_file }}"
+    create: yes
+    line: "parsedevices=true"
+  delegate_to: localhost
+  run_once: true
+
+- name: "1015 SET INCIDENT START TIME"
+  set_fact:
+    incidentStartTime: "{{ (Description | replace('\\r', '') | regex_search('INCIDENT START TIME: ([^\\n]+)', '\\1') or ['N/A']) | first | replace('/','-') }}"
+
+- name: "1016 GET CURRENT RUN DATE AND TIME IN UTC"
+  command: date -u '+%m-%d-%Y %H:%M:%S'
+  register: utcDateTime
+  delegate_to: localhost
+  changed_when: false
+
+- name: "1017 SET RUN DATE TIME FACTS"
+  set_fact:
+    runDateTime: "{{ utcDateTime.stdout }}"
+    runDate: "{{ utcDateTime.stdout.split(' ')[0] }}"

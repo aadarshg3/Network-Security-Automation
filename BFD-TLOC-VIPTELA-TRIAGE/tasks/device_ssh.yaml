@@ -1,0 +1,74 @@
+---
+- name: "1051 CHECK SSH CONNECTION TO DEVICE"
+  wait_for:
+    host: "{{ MgmtIP }}"
+    port: 22
+    timeout: 5
+  register: ssh_output
+  ignore_errors: true
+  delegate_to: localhost
+
+- name: "1053 UPDATE SSH RESULT IN DEVICE RESULTS"
+  set_fact:
+    bfd_device_results: >
+      {{
+        bfd_device_results | combine({
+          "ssh_test": {
+            "result": "SSH connection is successful" if ssh_output is succeeded else "SSH connection failed",
+            "device_name": DNSEntityName,
+            "status": "OK" if ssh_output is succeeded else "Failed"
+          }
+        })
+      }}
+
+- name: "1054 SET SSH OK FLAG"
+  set_fact:
+    ssh_ok: "{{ ssh_output is succeeded }}"
+
+- name: "1055 DETECT PLATFORM VIA SHOW VERSION AND SYSTEM STATUS"
+  ansible.builtin.script:
+    executable: /usr/bin/python3
+    cmd: >
+      roles/BFD-TLOC-VIPTELA-TRIAGE/tasks/bfd_ssh.py
+      '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}", "password": "{{ ansible_password }}", "device_type": "cisco_ios", "commands": ["show version", "show system status", "show sdwan system status"]}'
+  register: show_version_raw
+  when: ssh_ok | bool
+  delegate_to: localhost
+  no_log: true
+  ignore_errors: true
+
+- name: "1056 PARSE SHOW VERSION RESULT"
+  set_fact:
+    show_version_result: "{{ show_version_raw.stdout | from_json }}"
+  when: ssh_ok | bool and show_version_raw.stdout is defined
+  ignore_errors: true
+
+- name: "1057 SET PLATFORM FROM SHOW VERSION OUTPUT"
+  set_fact:
+    platform: "{{ show_version_result.output | default({}) | detect_platform_from_output }}"
+  when: ssh_ok | bool and show_version_result is defined
+  ignore_errors: true
+
+- name: "1057B PLATFORM FALLBACK FROM INVENTORY MAKE"
+  set_fact:
+    platform: "{{ make | default('') | detect_platform_from_make }}"
+  when: ssh_ok | bool and (platform is not defined or platform == '')
+
+- name: "1057C PLATFORM FINAL FALLBACK — DEFAULT VEDGE"
+  set_fact:
+    platform: "vedge"
+  when: ssh_ok | bool and (platform is not defined or platform == '')
+
+- debug:
+    msg: "Platform detected: {{ platform | upper }}"
+  when: ssh_ok | bool
+
+- name: "1058 WRITE SSH AND PLATFORM RESULT"
+  lineinfile:
+    path: "{{ output_file }}"
+    insertafter: 'Observations:'
+    line: |
+      SSH and Platform:
+        - SSH to {{ MgmtIP }} : {{ 'Successful' if ssh_ok | bool else 'FAILED' }}
+        - Platform           : {{ platform | upper | default('UNKNOWN') }}
+  delegate_to: localhost

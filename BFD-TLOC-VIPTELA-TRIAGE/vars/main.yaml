@@ -1,0 +1,63 @@
+---
+iAutomate_INV_WS: "{{ lookup('env', 'iAutomate_INV_WS') | default('.', true) }}"
+output_file: "{{ iAutomate_INV_WS }}/output/output.dat"
+output_dir: "{{ iAutomate_INV_WS }}/output"
+interfaceDict: "{{ params }}"
+cmdError: "Error in command execution. Engage NOC for manual troubleshooting and customer update.\n\n=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+"
+lineSeparator: "\n\n=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+"
+dbESP: "OPS"
+vmanagePort: "443"
+
+# --- connectivity flags ---
+ping_reachable: false
+ssh_ok: false
+
+# --- platform ---
+platform: ""
+
+# --- input parsing ---
+tloc_color: ""
+incidentType: ""
+assureAlarmID: "0"
+alarm_text: ""
+
+# --- BFD state ---
+bfd_up: false
+bfd_sessions: []
+bfd_history: []
+bfd_not_configured: false
+bfd_flapping: false
+bfd_scope: ""
+bfd_down_sessions: []
+
+# --- control/interface/scope ---
+control_connections: {}
+control_tloc_up: false
+control_raw_output: {}
+interface_status: {}
+interface_raw_output: {}
+tloc_local: false
+interface_down: false
+omp_raw_output: {}
+omp_peers: {}
+omp_peers_up: 0
+omp_peers_down: 0
+
+# --- redundancy ---
+redundant_router_ip: ""
+
+# --- remediation ---
+template_managed: false
+remediation_attempted: false
+bounce_failed: false
+bfd_confirmed_up: false
+
+# --- vManage ---
+vmanage_ip: ""
+vmanage_authenticated: false
+vmanage_headers: {}
+vmanage_alarm_uuids: []
+
+# --- closure ---
+closure_ready: false
+escalate_tier2: false

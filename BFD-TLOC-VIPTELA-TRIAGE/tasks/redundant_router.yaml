@@ -1,0 +1,46 @@
+---
+- name: "1101 RUN VRRP AND LAN INTERFACE COMMANDS"
+  ansible.builtin.script:
+    executable: /usr/bin/python3
+    cmd: >
+      roles/BFD-TLOC-VIPTELA-TRIAGE/tasks/bfd_ssh.py
+      '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}", "password": "{{ ansible_password }}", "device_type": "cisco_ios", "commands": ["show vrrp brief", "show vrrp detail", "show interfaces description", "show ip interface brief", "sh vrf"]}'
+  register: vrrp_raw
+  delegate_to: localhost
+  no_log: true
+  ignore_errors: true
+
+- name: "1102 PARSE VRRP OUTPUT"
+  set_fact:
+    vrrp_parsed: "{{ vrrp_raw.stdout | from_json }}"
+  when: vrrp_raw.stdout is defined
+  ignore_errors: true
+
+- name: "1103 SET REDUNDANT ROUTER IP"
+  set_fact:
+    redundant_router_ip: "{{ vrrp_parsed.output | default({}) | parse_redundant_router_ip(MgmtIP) }}"
+  when: vrrp_parsed is defined
+
+- name: "1104 RUN BFD CHECK ON REDUNDANT ROUTER VIA VRF SSH (CEDGE)"
+  ansible.builtin.script:
+    executable: /usr/bin/python3
+    cmd: >
+      roles/BFD-TLOC-VIPTELA-TRIAGE/tasks/bfd_ssh.py
+      '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}", "password": "{{ ansible_password }}", "device_type": "cisco_ios", "commands": ["ssh -l {{ ansible_user }} -vrf 1 {{ redundant_router_ip }}", "show sdwan bfd sessions", "show sdwan control connections"]}'
+  register: redundant_raw_cedge
+  when: redundant_router_ip | default('') != '' and platform == 'cedge'
+  delegate_to: localhost
+  no_log: true
+  ignore_errors: true
+
+- name: "1105 RUN BFD CHECK ON REDUNDANT ROUTER VIA VSHELL (VEDGE)"
+  ansible.builtin.script:
+    executable: /usr/bin/python3
+    cmd: >
+      roles/BFD-TLOC-VIPTELA-TRIAGE/tasks/bfd_ssh.py
+      '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}", "password": "{{ ansible_password }}", "device_type": "cisco_ios", "commands": ["vshell", "request execute vpn 1 ssh -l {{ ansible_user }}@{{ redundant_router_ip }}", "show bfd sessions", "show control connections"]}'
+  register: redundant_raw_vedge
+  when: redundant_router_ip | default('') != '' and platform == 'vedge'
+  delegate_to: localhost
+  no_log: true
+  ignore_errors: true

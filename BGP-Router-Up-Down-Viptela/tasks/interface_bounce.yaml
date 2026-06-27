@@ -1,0 +1,145 @@
+---
+- name: "1091 INTERFACE BOUNCE — CEDGE (config-transaction → shutdown → commit → no shutdown → commit)"
+  block:
+    - ansible.builtin.script:
+        executable: /usr/bin/python3
+        cmd: >
+          roles/BGP-Router-Up-Down-Viptela/tasks/bgp_ssh.py
+          '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}",
+            "password": "{{ ansible_password }}",
+            "enable_password": "{{ credentials["cinfo_" + ((CinfoCredentials | default("")).split(",") | last | trim)][0].password | default(ansible_password) }}",
+            "device_type": "cisco_ios",
+            "config_mode": "cedge",
+            "config_commands": ["interface {{ bounce_interface }}", "shutdown"],
+            "post_config_commands": ["interface {{ bounce_interface }}", "no shutdown"],
+            "verify_commands": ["show ip int brief | include {{ bounce_interface }}"]}'
+      register: bounce_raw_cedge
+      no_log: true
+
+    - name: "1091-PARSE CEDGE BOUNCE RESULT"
+      set_fact:
+        bounce_result_cedge: "{{ bounce_raw_cedge.stdout | from_json }}"
+
+    - name: "1091-VERIFY CEDGE INTERFACE CAME UP"
+      set_fact:
+        bounce_ok_cedge: >-
+          {{ 'up' in (bounce_result_cedge.output.values() | list | join(' ')).lower() }}
+
+    - name: "1091-RETRY CEDGE NO-SHUT IF INTERFACE STILL DOWN"
+      ansible.builtin.script:
+        executable: /usr/bin/python3
+        cmd: >
+          roles/BGP-Router-Up-Down-Viptela/tasks/bgp_ssh.py
+          '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}",
+            "password": "{{ ansible_password }}",
+            "enable_password": "{{ credentials["cinfo_" + ((CinfoCredentials | default("")).split(",") | last | trim)][0].password | default(ansible_password) }}",
+            "device_type": "cisco_ios",
+            "config_mode": "cedge",
+            "config_commands": [],
+            "post_config_commands": ["interface {{ bounce_interface }}", "no shutdown"],
+            "verify_commands": ["show ip int brief | include {{ bounce_interface }}"]}'
+      register: bounce_retry_cedge
+      no_log: true
+      when: not (bounce_ok_cedge | bool)
+
+  rescue:
+    - name: "1091-RESCUE CEDGE BOUNCE FAILED"
+      set_fact:
+        bounce_failed: true
+        escalate_tier2: true
+      delegate_to: localhost
+
+    - name: "1091-RESCUE WRITE CEDGE BOUNCE FAILURE"
+      lineinfile:
+        path: "{{ output_file }}"
+        line: |
+          WARNING [INTERFACE BOUNCE]: Bounce failed on {{ bounce_interface }} (cEdge {{ MgmtIP }}).
+          Interface may be in shutdown state. Manual intervention required immediately.
+          NOC: SSH to device and run: interface {{ bounce_interface }} / no shutdown / commit
+      delegate_to: localhost
+
+  when: (platform == 'cedge' or platform == '') and interface_bounce_safe | bool
+  delegate_to: localhost
+
+# vEdge bounce with rescue block
+- name: "1091B INTERFACE BOUNCE — VEDGE (config → vpn → interface → shutdown → commit → no shutdown → commit)"
+  block:
+    - ansible.builtin.script:
+        executable: /usr/bin/python3
+        cmd: >
+          roles/BGP-Router-Up-Down-Viptela/tasks/bgp_ssh.py
+          '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}",
+            "password": "{{ ansible_password }}", "device_type": "cisco_ios",
+            "config_mode": "vedge",
+            "config_commands": ["vpn {{ bounce_vpn_id | default(vpn_id) | default('0') }}", "interface {{ bounce_interface }}", "shutdown"],
+            "post_config_commands": ["interface {{ bounce_interface }}", "no shutdown"],
+            "verify_commands": ["show interface vpn {{ bounce_vpn_id | default(vpn_id) | default('0') }} {{ bounce_interface }}"]}'
+      register: bounce_raw_vedge
+      no_log: true
+
+    - name: "1091B-PARSE VEDGE BOUNCE RESULT"
+      set_fact:
+        bounce_result_vedge: "{{ bounce_raw_vedge.stdout | from_json }}"
+
+    - name: "1091B-VERIFY VEDGE INTERFACE CAME UP"
+      set_fact:
+        bounce_ok_vedge: >-
+          {{ 'up' in (bounce_result_vedge.output.values() | list | join(' ')).lower() }}
+
+    - name: "1091B-RETRY VEDGE NO-SHUT IF INTERFACE STILL DOWN"
+      ansible.builtin.script:
+        executable: /usr/bin/python3
+        cmd: >
+          roles/BGP-Router-Up-Down-Viptela/tasks/bgp_ssh.py
+          '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}",
+            "password": "{{ ansible_password }}", "device_type": "cisco_ios",
+            "config_mode": "vedge",
+            "config_commands": ["vpn {{ bounce_vpn_id | default(vpn_id) | default('0') }}", "interface {{ bounce_interface }}"],
+            "post_config_commands": ["interface {{ bounce_interface }}", "no shutdown"],
+            "verify_commands": ["show interface vpn {{ bounce_vpn_id | default(vpn_id) | default('0') }} {{ bounce_interface }}"]}'
+      register: bounce_retry_vedge
+      no_log: true
+      when: not (bounce_ok_vedge | bool)
+
+  rescue:
+    - name: "1091B-RESCUE VEDGE BOUNCE FAILED"
+      set_fact:
+        bounce_failed: true
+        escalate_tier2: true
+      delegate_to: localhost
+
+    - name: "1091B-RESCUE WRITE VEDGE BOUNCE FAILURE"
+      lineinfile:
+        path: "{{ output_file }}"
+        line: |
+          WARNING [INTERFACE BOUNCE]: Bounce failed on {{ bounce_interface }} (vEdge {{ MgmtIP }}).
+          Interface may be in shutdown state. Manual intervention required immediately.
+          NOC: SSH to device and run:
+            config
+              vpn {{ bounce_vpn_id | default(vpn_id) | default('0') }}
+                interface {{ bounce_interface }}
+                  no shutdown
+            commit
+      delegate_to: localhost
+
+  when: platform == 'vedge' and interface_bounce_safe | bool
+  delegate_to: localhost
+
+- name: "1092 SET BOUNCE ATTEMPTED FLAG"
+  set_fact:
+    bounce_attempted: true
+  when: interface_bounce_safe | bool
+
+- name: "1093 WRITE INTERFACE BOUNCE RESULT"
+  lineinfile:
+    path: "{{ output_file }}"
+    line: |
+      Interface Bounce:
+        - Interface    : {{ bounce_interface }}
+        - Platform     : {{ platform | upper }}
+        - Action       : shut/no shutdown executed
+        - Result       : {{ 'WARNING — bounce failed. Interface may be shutdown. Manual action required.'
+            if (bounce_failed | default(false) | bool) else
+            'Command sent successfully' }}
+  delegate_to: localhost
+  when: interface_bounce_safe | bool

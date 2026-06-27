@@ -1,0 +1,62 @@
+---
+iAutomate_INV_WS: "{{ lookup('env', 'iAutomate_INV_WS') | default('.', true) }}"
+output_file: "{{ iAutomate_INV_WS }}/output/output.dat"
+output_dir: "{{ iAutomate_INV_WS }}/output"
+interfaceDict: "{{ params }}"
+cmdError: "Error in command execution. Engage NOC for manual troubleshooting and customer update.\n\n=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+"
+lineSeparator: "\n\n=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+"
+dbESP: "OPS"
+vmanagePort: "443"
+
+# --- connectivity flags ---
+ping_reachable: false
+ssh_ok: false
+
+# --- platform ---
+platform: ""
+
+# --- input parsing ---
+vpn_id: "0"
+peer_sysip: ""
+incidentType: ""
+assureAlarmID: "0"
+alarm_text: ""
+
+# --- BGP state ---
+bgp_all_up: false
+bgp_neighbors: []
+bgp_stuck_neighbors: []
+template_managed: false
+
+# --- remediation ---
+neighbor_reachable: false
+remediation_attempted: false
+bgp_recovered: false
+bounce_attempted: false
+bounce_interface: ""
+interface_bounce_safe: false
+
+# --- vManage ---
+vmanage_ip: ""
+vmanage_authenticated: false
+vmanage_headers: {}
+alarm_uuids: []
+alarm_cleared: false
+
+# --- closure ---
+closure_ready: false
+escalate_tier2: false
+escalate_reason: ""
+
+# --- v10 gap fix variables ---
+ssh_failure_reason: "none"
+neighbor_evidence_cedge: {}
+neighbor_evidence_vedge: {}
+
+# --- v10 VPN-sourced ping variables ---
+agent_ping_ok: false
+device_ping_ok: false
+wan_interface_vedge: ""
+wan_interface_cedge: ""
+device_ping_vedge: {}
+device_ping_cedge: {}

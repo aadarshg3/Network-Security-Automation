@@ -1,0 +1,52 @@
+---
+- name: "1041 TEST PING TO DEVICE"
+  command: "ping -c 5 {{ MgmtIP }}"
+  register: pingResult
+  ignore_errors: true
+  delegate_to: localhost
+
+- name: "1042 ANALYZE PING RESULT"
+  set_fact:
+    packetLoss: "{{ pingResult.stdout | regex_search('(\\d+)% packet loss', '\\1') | list | first | default('unknown') }}"
+
+- name: "1046 UPDATE PING RESULT IN DEVICE RESULTS"
+  set_fact:
+    bfd_device_results: >
+      {{
+        bfd_device_results | default({}) | combine({
+          "ping_test": {
+            "result": "Ping test is successful" if pingResult.rc == 0 else "Ping test failed. Please check with NOC engineer.",
+            "mgmtIP": MgmtIP,
+            "domain": domain,
+            "packet_loss": packetLoss | int ~ "% Packet loss",
+            "status": "OK" if packetLoss | int == 0 else "Warning"
+          }
+        })
+      }}
+
+- name: "1047 INITIALIZE DEVICE RESULTS STRUCTURE"
+  set_fact:
+    bfd_device_results: >
+      {{
+        bfd_device_results | default({}) | combine({
+          "Devices": {
+            "Hostname": entityHostName | default(DNSEntityName),
+            "ManagementIPAddress": MgmtIP,
+            "NEID": DNSEntityName,
+            "Make": make,
+            "Model": model,
+            "DeviceType": deviceType,
+            "Domain": domain | default(''),
+            "RunDateTime": runDateTime
+          }
+        })
+      }}
+
+- name: "1048 WRITE PING RESULT"
+  lineinfile:
+    path: "{{ output_file }}"
+    insertafter: 'Observations:'
+    line: |
+      Device Reachability:
+        - Ping to {{ MgmtIP }} from {{ domain }}: {{ 'Successful — 0% Packet Loss — OK' if pingResult.rc == 0 else 'FAILED — ' + (packetLoss | string) + '% Packet Loss' }}
+  delegate_to: localhost

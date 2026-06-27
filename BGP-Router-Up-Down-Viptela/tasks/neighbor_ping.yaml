@@ -1,0 +1,182 @@
+---
+# neighbor_ping.yaml — v10
+# MOP image2: Two-stage neighbor reachability check:
+#   Stage 1 (task 1071): Basic ICMP ping from Jenkins agent
+#   Stage 2 (tasks 1071B/1071C): VPN-sourced ping FROM device via SSH
+#     - vEdge: "ping <neighbor-ip> vpn 0 source <wan-interface>"
+#     - cEdge: plain ping only — VRF-sourced ping removed (cEdge VRF name != vpn_id number)
+# Both stages inform neighbor_reachable flag.
+# neighbor_reachable = true only when both pass (or device-side confirms reachability).
+
+# Stage 1 — basic ICMP from Jenkins agent
+- name: "1071 PING BGP NEIGHBOR IP FROM JENKINS AGENT"
+  command: "ping -c 3 -W 2 {{ peer_sysip }}"
+  register: neighbor_ping_result
+  ignore_errors: true
+  delegate_to: localhost
+  when: peer_sysip is defined and peer_sysip != ''
+
+- name: "1071A SET AGENT PING FLAG"
+  set_fact:
+    agent_ping_ok: >-
+      {{
+        neighbor_ping_result.rc == 0
+        if (peer_sysip is defined and peer_sysip != ''
+            and neighbor_ping_result is defined
+            and neighbor_ping_result.rc is defined)
+        else false
+      }}
+
+# Stage 2 — VPN-sourced ping FROM the device itself via SSH
+# MOP: "Ping <neighbor-ip> OR Ping <neighbor-ip> vpn 0 source <wan-interface>"
+# This confirms reachability at the device level through the correct VPN/VRF.
+# Extracts WAN interface from diagnostic bundle collected in device_ssh.yaml.
+
+# Derive WAN interface from already-collected diagnostic bundle
+- name: "1071B DERIVE WAN INTERFACE FROM DIAGNOSTIC BUNDLE"
+  set_fact:
+    wan_interface_vedge: >-
+      {{
+        (bgp_diag_vedge.output | default({})).get('show interface', '')
+        | get_wan_interface_vedge
+      }}
+    wan_interface_cedge: >-
+      {{
+        (bgp_diag_cedge.output | default({})).get('show ip int brief', '')
+        | get_wan_interface_cedge
+      }}
+  when: ssh_ok | bool
+  ignore_errors: true
+
+- name: "1071C RUN VPN-SOURCED PING FROM DEVICE — VEDGE"
+  block:
+    - name: "1071C-SSH EXECUTE VPN-SOURCED PING — VEDGE"
+      ansible.builtin.script:
+        executable: /usr/bin/python3
+        cmd: >
+          roles/BGP-Router-Up-Down-Viptela/tasks/bgp_ssh.py
+          '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}",
+            "password": "{{ ansible_password }}", "device_type": "cisco_ios",
+            "commands": [
+              "ping {{ peer_sysip }} vpn 0",
+              "ping {{ peer_sysip }}"
+            ]}'
+      register: device_ping_raw_vedge
+      delegate_to: localhost
+      no_log: true
+
+    - name: "1071C PARSE VEDGE DEVICE PING RESULT"
+      set_fact:
+        device_ping_vedge: "{{ device_ping_raw_vedge.stdout | from_json }}"
+      when: >
+        device_ping_raw_vedge is defined and
+        device_ping_raw_vedge.failed == false and
+        device_ping_raw_vedge.stdout is defined
+
+    # BUG 7 FIX: Scope success check to ping command output keys only.
+    # Checking all .values() could falsely match 'success' in non-ping output.
+    # We look for the ping command keys specifically, then check their output.
+    - name: "1071C SET DEVICE PING OK — VEDGE"
+      set_fact:
+        device_ping_ok: >-
+          {{
+            (device_ping_vedge.output | default({})).items()
+            | selectattr(0, 'match', '^ping ')
+            | map(attribute=1) | map('lower')
+            | select('search', 'success rate is [1-9]|!!!!!')
+            | list | length > 0
+          }}
+      when: device_ping_vedge is defined
+
+  rescue:
+    - name: "1071C VEDGE DEVICE PING SSH FAILED"
+      set_fact:
+        device_ping_ok: false
+      # SSH failed for device-side ping — fall back to agent ping result only
+    - debug:
+        msg: >
+          DEVICE-SIDE PING SSH FAILED for {{ MgmtIP }} (vEdge).
+          Falling back to agent-side ping result only.
+    - ansible.builtin.meta: clear_host_errors
+  when: ssh_ok | bool and platform == 'vedge' and peer_sysip is defined and peer_sysip != ''
+
+- name: "1071D RUN VPN-SOURCED PING FROM DEVICE — CEDGE"
+  block:
+    - name: "1071D-SSH EXECUTE VPN-SOURCED PING — CEDGE"
+      ansible.builtin.script:
+        executable: /usr/bin/python3
+        cmd: >
+          roles/BGP-Router-Up-Down-Viptela/tasks/bgp_ssh.py
+          '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}",
+            "password": "{{ ansible_password }}",
+            "enable_password": "{{ ansible_password }}",
+            "device_type": "cisco_ios",
+            "commands": [
+              "ping {{ peer_sysip }}"
+            ]}'
+      register: device_ping_raw_cedge
+      delegate_to: localhost
+      no_log: true
+
+    - name: "1071D PARSE CEDGE DEVICE PING RESULT"
+      set_fact:
+        device_ping_cedge: "{{ device_ping_raw_cedge.stdout | from_json }}"
+      when: >
+        device_ping_raw_cedge is defined and
+        device_ping_raw_cedge.failed == false and
+        device_ping_raw_cedge.stdout is defined
+
+    # BUG 7 FIX: Scope success check to ping command output keys only.
+    - name: "1071D SET DEVICE PING OK — CEDGE"
+      set_fact:
+        device_ping_ok: >-
+          {{
+            (device_ping_cedge.output | default({})).items()
+            | selectattr(0, 'match', '^ping ')
+            | map(attribute=1) | map('lower')
+            | select('search', 'success rate is [1-9]|!!!!!')
+            | list | length > 0
+          }}
+      when: device_ping_cedge is defined
+
+  rescue:
+    - name: "1071D CEDGE DEVICE PING SSH FAILED"
+      set_fact:
+        device_ping_ok: false
+    - debug:
+        msg: >
+          DEVICE-SIDE PING SSH FAILED for {{ MgmtIP }} (cEdge).
+          Falling back to agent-side ping result only.
+    - ansible.builtin.meta: clear_host_errors
+  when: ssh_ok | bool and (platform == 'cedge' or platform == '') and peer_sysip is defined and peer_sysip != ''
+
+# Safe default when device-side ping was not attempted (SSH not available)
+- name: "1071E DEFAULT DEVICE PING OK IF SSH NOT AVAILABLE"
+  set_fact:
+    device_ping_ok: "{{ agent_ping_ok | bool }}"
+  when: not (ssh_ok | bool) or device_ping_ok is not defined
+
+# Final neighbor_reachable decision:
+# Reachable if EITHER agent ping OR device-side ping succeeded.
+# Device-side ping is more authoritative — neighbor reachable from device VPN
+# even if not reachable from Jenkins agent network.
+- name: "1072 SET NEIGHBOR REACHABLE FLAG"
+  set_fact:
+    neighbor_reachable: "{{ (agent_ping_ok | bool) or (device_ping_ok | bool) }}"
+
+- name: "1073 SET ESCALATE IF NEIGHBOR NOT REACHABLE"
+  set_fact:
+    escalate_tier2: true
+  when: not (neighbor_reachable | bool)
+
+- name: "1074 WRITE NEIGHBOR PING RESULT"
+  lineinfile:
+    path: "{{ output_file }}"
+    line: |
+      BGP Neighbor Reachability:
+        - Neighbor system-IP     : {{ peer_sysip | default('Not parsed from TEXT') }}
+        - Agent ping (Jenkins)   : {{ 'OK — 0% loss' if agent_ping_ok | bool else 'FAILED — packet loss or no route from Jenkins agent' }}
+        - Device ping (VPN/VRF)  : {{ 'OK — peer reachable from device' if device_ping_ok | bool else 'FAILED — peer not reachable from device VPN' if ssh_ok | bool else 'NOT RUN — SSH unavailable' }}
+        - WAN interface used     : {{ wan_interface_vedge | default(wan_interface_cedge | default('Not identified')) if ssh_ok | bool else 'N/A' }}
+        - Final result           : {{ 'REACHABLE — proceeding with BGP remediation' if neighbor_reachable | bool else 'NOT REACHABLE — evidence collection and Tier-2 escalation' }}
+  delegate_to: localhost

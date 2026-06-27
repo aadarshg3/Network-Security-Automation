@@ -1,0 +1,273 @@
+---
+# Cisco-Router-Device-Down — Closure: post-snapshot, diff, success eval, AVA tag.
+
+- block:
+
+    - name: 1800 GATHER POST-REMEDIATION RUNNING-CONFIG (IOS / IOS-XE)
+      ansible.builtin.script: >
+        tasks/device_ssh.py
+        'platform={{ detected_platform | default('ios') }}'
+        '{{ MgmtIP }}'
+        '{{ ansible_user }}'
+        '{{ ansible_password }}'
+        '{{ ["show running-config"] | to_json }}'
+      args:
+        executable: python3
+      register: post_snapshot_raw_ios
+      no_log: true
+      delegate_to: localhost
+      when:
+        - run_primary_remediation
+        - detected_platform in ['ios', 'ios_xe']
+
+    - name: 1801 GATHER POST-REMEDIATION RUNNING-CONFIG (IOS-XR)
+      ansible.builtin.script: >
+        tasks/device_ssh.py
+        'platform={{ detected_platform | default('ios') }}'
+        '{{ MgmtIP }}'
+        '{{ ansible_user }}'
+        '{{ ansible_password }}'
+        '{{ ["show running-config"] | to_json }}'
+      args:
+        executable: python3
+      register: post_snapshot_raw_xr
+      no_log: true
+      delegate_to: localhost
+      when:
+        - run_primary_remediation
+        - detected_platform == 'ios_xr'
+
+    - name: 1802 PARSE POST-SNAPSHOT OUTPUT
+      ansible.builtin.set_fact:
+        post_snapshot_parsed: >-
+          {{
+            (post_snapshot_raw_ios.stdout | default('{}') | safe_json_parse)
+            if detected_platform in ['ios', 'ios_xe']
+            else (post_snapshot_raw_xr.stdout | default('{}') | safe_json_parse)
+          }}
+      when: run_primary_remediation
+
+    - name: 1803 EXTRACT POST-REMEDIATION RUNNING-CONFIG
+      ansible.builtin.set_fact:
+        post_running_config:   "{{ (post_snapshot_parsed.outputs | default({})).get('show running-config', '') }}"
+        post_snapshot_success: "{{ post_snapshot_parsed.success | default(false) | bool }}"
+      when: run_primary_remediation
+
+    - name: 1810 GENERATE CONFIG DIFF (changes only)
+      ansible.builtin.set_fact:
+        config_diff_output: "{{ pre_running_config | default('') | diff_running_configs(post_running_config | default('')) }}"
+      when:
+        - run_primary_remediation
+        - pre_running_config | default('') | length > 0
+        - post_running_config | default('') | length > 0
+
+    - name: 1811 WRITE CONFIG CHANGES TO OUTPUT
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          CONFIGURATION CHANGES (pre vs post automation)
+          ============================================================
+          {{ config_diff_output | default('Config-change diff unavailable — running-config not captured pre and/or post (device unreachable or SSH failed).') }}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when: run_primary_remediation
+
+    - name: 1820 EVALUATE OVERALL SUCCESS
+      # Per MOP close criteria (NOC ref #15): a device is "verified UP" ONLY when
+      # it answered ICMP from the iAutomate management plane — on first ping, after
+      # a WAN bounce, or after BGP recovery. reachable_via_partner is DELIBERATELY
+      # excluded: the partner pinging the primary's MgmtIP means the device is
+      # alive but still unmanageable from our plane (the alarm condition persists),
+      # so it must escalate, not auto-close. Including it also re-created the
+      # "Device verified UP + NOC ESCALATION REQUIRED" contradiction on the
+      # unreachable path (it is reported in the FINAL OUTCOME block instead).
+      ansible.builtin.set_fact:
+        device_verified_up: >-
+          {{
+            primary_reachable
+            or post_bounce_reachable | default(false)
+            or post_bgp_reachable | default(false)
+            or static_post_reachable | default(false)
+          }}
+
+    - name: 1821 RECONCILE ESCALATION FLAG
+      ansible.builtin.set_fact:
+        # Clear escalation only when the device is verified up through a known
+        # good outcome: clean initial reachability (no remediation), or recovery
+        # via WAN bounce, BGP clear, or static next-hop. Otherwise preserve it.
+        escalation_needed: >-
+          {{
+            false
+            if device_verified_up and (
+               (primary_reachable and not run_primary_remediation)
+               or post_bounce_reachable | default(false)
+               or post_bgp_reachable    | default(false)
+               or static_post_reachable | default(false)
+            )
+            else escalation_needed | default(false)
+          }}
+
+    - name: 1825 MARK CLOSURE PHASE
+      ansible.builtin.set_fact:
+        phase_results: "{{ phase_results | combine({'closure': 'ok'}) }}"
+
+    - name: 1830 LOG PHASE RESULTS SUMMARY
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          PHASE RESULTS SUMMARY
+          ============================================================
+          {% for phase_name, phase_status in phase_results.items() | sort %}
+          {{ phase_name }}: {{ phase_status }}
+          {% endfor %}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    - name: 1840 LOG OVERALL OUTCOME
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          FINAL OUTCOME
+          ============================================================
+          Device verified UP (from iAutomate)             : {{ device_verified_up }}
+          Device alive on customer network (via partner)   : {{ reachable_via_partner | default(false) }}
+          Initial ping reachable                           : {{ primary_reachable }}
+          Reachable after WAN bounce                       : {{ post_bounce_reachable | default(false) }}
+          Reachable after BGP recovery                     : {{ post_bgp_reachable | default(false) }}
+          Bounce attempted                                 : {{ bounce_attempted }}
+          BGP clear attempted                              : {{ bgp_clear_attempted }}
+          Secondary router used                            : {{ partner_neid if partner_neid | default('') else 'None — not needed or not found' }}
+          Platform                                         : {{ detected_platform }}
+          WAN interface                                    : {{ wan_interface if wan_interface else 'NOT IDENTIFIED' }}
+          Static default next-hop                          : {{ static_default_next_hop if static_default_next_hop else 'none' }}
+          PE IP                                            : {{ pe_ip if pe_ip else 'NOT DERIVABLE' }}
+          Config diff captured                             : {{ 'Yes' if config_diff_output | default('') | length > 0 else 'No (pre or post snapshot missing)' }}
+          Escalation needed                                : {{ escalation_needed }}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    - name: 1850 WRITE AVA CLOSURE TAG ON SUCCESS
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: "ava-TRIAGE-DeviceUpDown - Post-Test Validation: Device verified UP"
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when: device_verified_up
+
+    - name: 1860 APPEND ESCALATION NOTE ON NOC HANDOFF
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          [NOC ESCALATION REQUIRED]
+          ============================================================
+          {% if failed_phase | default('') | length > 0 %}
+          Automation stopped at: {{ failed_phase | upper }} phase.
+          It did NOT complete all checks — see the reason below.
+          {% else %}
+          Automation completed all applicable checks and could not restore the device.
+          {% endif %}
+          Device state: {{ 'UP' if device_verified_up else 'UNRESOLVED — still unreachable or degraded' }}
+
+          {% if failure_reason | default('') | length > 0 %}
+          ── Why automation could not resolve it ──
+          {{ failure_reason }}
+          {% endif %}
+          {% if noc_next_action | default('') | length > 0 %}
+          ── What NOC should do next ──
+          {{ noc_next_action }}
+          {% endif %}
+
+          ── How far automation got (phase results) ──
+            input_gathering      : {{ phase_results.input_gathering }}
+            primary_reachability : {{ phase_results.primary_reachability }}
+            partner_discovery    : {{ phase_results.partner_discovery }}
+            partner_login        : {{ phase_results.partner_login }}
+            platform_detection   : {{ phase_results.platform_detection }}
+            wan_check            : {{ phase_results.wan_check }}
+            routing_analysis     : {{ phase_results.routing_analysis }}
+            bgp_remediation      : {{ phase_results.bgp_remediation }}
+            pe_check             : {{ phase_results.pe_check }}
+
+          ── Facts for NOC ──
+            NEID            : {{ DNSEntityName }}
+            MgmtIP          : {{ MgmtIP }}
+            Location ID     : {{ location_id | default(DNSEntityName.split('-')[:2] | join('-')) }}
+            Platform        : {{ detected_platform }}
+            Secondary found : {{ partner_found | default(false) }}{{ ' (' + partner_ip + ')' if partner_found | default(false) else '' }}
+            WAN Interface   : {{ wan_interface if wan_interface else 'NOT IDENTIFIED' }}
+            Static Next-Hop : {{ static_default_next_hop if static_default_next_hop else 'none' }}
+            PE IP           : {{ pe_ip if pe_ip else 'NOT DERIVABLE — see Gen-E' }}
+            PE Reachable    : {{ pe_reachable | default(false) }}
+            PE ARP Present  : {{ pe_arp_present | default(false) }}
+            BGP stuck peers : {{ stuck_neighbors | length }}
+            BGP cleared     : {{ bgp_clear_attempted }}
+            Bounce done     : {{ bounce_attempted }}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when: escalation_needed or not device_verified_up
+
+    - name: 1870 SET STATUS_CODES ON SUCCESS
+      ansible.builtin.set_fact:
+        status_codes: "1"
+        is_failed: false
+      when: device_verified_up
+
+    - name: 1871 SET STATUS_CODES ON ESCALATION
+      ansible.builtin.set_fact:
+        status_codes: "2"
+        is_failed: true
+      when:
+        - not device_verified_up
+        - escalation_needed
+
+    - name: 1872 SET STATUS_CODES DEFAULT
+      ansible.builtin.set_fact:
+        status_codes: "0"
+        is_failed: true
+      when: status_codes is not defined
+
+    - name: 1999 READ OUTPUT FILE FOR RESPONSE_MSG
+      ansible.builtin.slurp:
+        src: "{{ iAutomate_INV_WS }}/output.dat"
+      register: output_dat_raw
+      delegate_to: localhost
+
+    - name: 1999A SET RESPONSE_MSG
+      ansible.builtin.set_fact:
+        response_msg:      "{{ output_dat_raw.content | b64decode }}"
+        iautomate_success: "{{ output_dat_raw.content | b64decode | replace_update_with_notify }}"
+
+  rescue:
+    - name: 1800R CLOSURE RESCUE
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          [CLOSURE] PHASE FAILED — unexpected error in closure tasks
+          ============================================================
+          Closure encountered an error. Review Jenkins log for details.
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    # master_vz_template.yml references response_msg — if undefined, it fails.
+    - name: 1800R SET CLOSURE FAILED
+      ansible.builtin.set_fact:
+        status_codes:      "2"
+        response_msg:      "Automation encountered errors during closure — check output.dat in Jenkins workspace for details."
+        iautomate_success: "Automation encountered errors during closure — check output.dat in Jenkins workspace for details."
+        phase_results: "{{ phase_results | combine({'closure': 'failed'}) }}"

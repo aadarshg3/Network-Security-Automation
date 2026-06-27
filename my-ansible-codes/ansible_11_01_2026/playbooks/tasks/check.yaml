@@ -1,7 +1,0 @@
-- name: "10 RUN SHOW VERSION ON REMOTE DEVICE"
-  cisco.ios.ios_command:
-    commands: 
-      - show version
-      - show interface description
-      - show ip int brief
-  register: ver

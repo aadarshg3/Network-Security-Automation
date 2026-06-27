@@ -1,0 +1,64 @@
+---
+- name: "1020A NORMALIZE PROBLEM SUMMARY LINE BREAKS"
+  set_fact:
+    normalized_ps: "{{ Description | replace('\\r', '') | replace('\\n', '\n') }}"
+
+- name: "1021 EXTRACT INCIDENT TYPE FROM PROBLEM SUMMARY"
+  set_fact:
+    incTypePrbSum: "{{ (normalized_ps.split('\n') | select('match', '^INCIDENT TYPE: ') | list | default([''], true))[0] | regex_replace('^INCIDENT TYPE: ', '') | default('') }}"
+
+- name: "1021B FALLBACK INCIDENT TYPE FROM REGEX"
+  set_fact:
+    incTypePrbSum: "{{ (normalized_ps | regex_search('INCIDENT TYPE: ([^\\n]+)', '\\1') or ['']) | first }}"
+  when: incTypePrbSum == ""
+
+- name: "1022 STRIP SOURCED FROM INCIDENT TYPE"
+  set_fact:
+    incidentType: "{{ incTypePrbSum.split('SOURCED')[0] | trim | default('') }}"
+
+- debug: var=incidentType
+
+- name: "1023 EXTRACT TLOC COLOR FROM TEXT FIELD"
+  set_fact:
+    tloc_color: "{{ normalized_ps | extract_tloc_color }}"
+
+- debug: var=tloc_color
+
+- name: "1024 EXTRACT ASSURE1 ALARM ID"
+  set_fact:
+    assureAlarmID: "{{ (normalized_ps | regex_search('ASSURE1 ALARM ID: (\\d+)', '\\1') or ['0']) | first }}"
+
+- debug: var=assureAlarmID
+
+- name: "1025 EXTRACT ALARM TEXT"
+  set_fact:
+    alarm_text: "{{ (normalized_ps | regex_search('TEXT: ([^\\n]+)', '\\1') or ['N/A']) | first | trim }}"
+
+- name: "1026 VALIDATE INCIDENT TYPE IS BFDTLOCUPDOWN"
+  ansible.builtin.fail:
+    msg: "Incident type '{{ incidentType }}' is not BFDTLOCUpDown. Aborting."
+  when: "'BFDTLOCUpDown' not in incidentType"
+
+- name: "1027 WRITE SUMMARY HEADER TO OUTPUT FILE"
+  lineinfile:
+    path: "{{ output_file }}"
+    create: yes
+    line: |
+      {{ domain | default(DNSEntityName) }}#{{ DNSEntityName }}#Success# SELECTED PLAYBOOK: BFD-TLOC-VIPTELA-TRIAGE
+      Sent request to iAutomate to execute playbook BFD-TLOC-VIPTELA-TRIAGE for {{ DNSEntityName }}
+      {{ "=" * 25 }} SUMMARY REPORT {{ runDate }} {{ "=" * 25 }}
+      Hostname / IP : {{ entityHostName | default(DNSEntityName) }} / {{ MgmtIP }}
+      NEID          : {{ DNSEntityName }}
+      Incident Type : {{ incidentType }}
+      TLOC Color    : {{ tloc_color }}
+      Alarm Text    : {{ alarm_text }}
+      Alarm Start   : {{ incidentStartTime | default('N/A') }}
+      Run Date/Time : {{ runDateTime }} UTC
+      {{ "-" * 78 }}
+  delegate_to: localhost
+
+- name: "1028 WRITE OBSERVATIONS HEADER"
+  lineinfile:
+    path: "{{ output_file }}"
+    line: "=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+\n\nObservations:"
+  delegate_to: localhost

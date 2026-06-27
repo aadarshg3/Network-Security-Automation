@@ -1,0 +1,87 @@
+---
+- name: "1081 RUN CONTROL CONNECTIONS (VEDGE)"
+  ansible.builtin.script:
+    executable: /usr/bin/python3
+    cmd: >
+      roles/BFD-TLOC-VIPTELA-TRIAGE/tasks/bfd_ssh.py
+      '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}", "password": "{{ ansible_password }}", "device_type": "cisco_ios", "commands": ["show control connections", "show control connections-history", "show control local-properties", "show system status", "show ntp status"]}'
+  register: ctrl_raw_vedge
+  when: platform == 'vedge' or platform == ''
+  delegate_to: localhost
+  no_log: true
+  ignore_errors: true
+
+- name: "1082 RUN CONTROL CONNECTIONS (CEDGE)"
+  ansible.builtin.script:
+    executable: /usr/bin/python3
+    cmd: >
+      roles/BFD-TLOC-VIPTELA-TRIAGE/tasks/bfd_ssh.py
+      '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}", "password": "{{ ansible_password }}", "device_type": "cisco_ios", "commands": ["show sdwan control connections", "show sdwan control connections-history", "show sdwan control local-properties", "show sdwan system status", "show ntp status"]}'
+  register: ctrl_raw_cedge
+  when: platform == 'cedge'
+  delegate_to: localhost
+  no_log: true
+  ignore_errors: true
+
+- name: "1083 PARSE CONTROL OUTPUT (VEDGE)"
+  set_fact:
+    ctrl_parsed_vedge: "{{ ctrl_raw_vedge.stdout | from_json }}"
+  when: (platform == 'vedge' or platform == '') and ctrl_raw_vedge.stdout is defined
+  ignore_errors: true
+
+- name: "1083B PARSE CONTROL OUTPUT (CEDGE)"
+  set_fact:
+    ctrl_parsed_cedge: "{{ ctrl_raw_cedge.stdout | from_json }}"
+  when: platform == 'cedge' and ctrl_raw_cedge.stdout is defined
+  ignore_errors: true
+
+- name: "1084 NORMALIZE CONTROL OUTPUT"
+  set_fact:
+    control_raw_output: >
+      {{
+        (ctrl_parsed_vedge.output | default({})) if (platform == 'vedge' or platform == '')
+        else (ctrl_parsed_cedge.output | default({}))
+      }}
+
+- name: "1085 PARSE CONTROL CONNECTIONS"
+  set_fact:
+    control_connections: "{{ control_raw_output | parse_control_connections }}"
+
+- name: "1086 DETERMINE CONTROL TLOC STATE"
+  set_fact:
+    control_tloc_up: "{{ control_connections.up | default([]) | length > 0 }}"
+
+- name: "1087 WRITE CONTROL RAW OUTPUT WHEN DOWN"
+  lineinfile:
+    path: "{{ output_file }}"
+    line: |
+      Control Connection Raw Data:
+        History: {{ control_raw_output | to_nice_yaml | truncate(500) }}
+  delegate_to: localhost
+  when: not (control_tloc_up | bool)
+  ignore_errors: true
+
+- name: "1088 WARN — CONTROL CONNECTION DATA UNAVAILABLE"
+  block:
+    - debug:
+        msg: >
+          CONTROL CONNECTION DATA UNAVAILABLE for {{ MgmtIP }}.
+          NOC: SSH to device and run 'show control connections' (vedge) or
+          'show sdwan control connections' (cedge) manually.
+    - lineinfile:
+        path: "{{ output_file }}"
+        line: |
+          WARNING [CONTROL STATE]: No control-plane data retrieved.
+            Cause: SSH error / bundle timeout / parse returned empty.
+            NOC: Run 'show control connections' / 'show sdwan control connections' manually.
+      delegate_to: localhost
+  when: control_raw_output | default({}) | length == 0
+  rescue:
+    - set_fact:
+        control_connections: {up: [], down: []}
+        control_tloc_up: false
+    - lineinfile:
+        path: "{{ output_file }}"
+        line: "ERROR [CONTROL PARSE]: Filter exception. NOC: manual investigation."
+      delegate_to: localhost
+    - ansible.builtin.meta: clear_host_errors

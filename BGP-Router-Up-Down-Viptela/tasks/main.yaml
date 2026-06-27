@@ -1,0 +1,103 @@
+---
+# v10 — GAP fixes applied:
+# GAP 1,2,6,7,8,9: device_ssh.yaml updated
+# GAP 3+4: neighbor_unreachable_evidence.yaml added (call after neighbor_ping)
+# GAP 5: get_bgp_state_diagnosis filter added, write_output.yaml updated
+
+- block:
+    - name: "1010 INCLUDE INITIALIZE RUN TASKS"
+      include_tasks: initialize_run.yaml
+
+    - name: "1020 INCLUDE INPUT GATHERING TASKS"
+      include_tasks: input_gathering.yaml
+
+    - name: "1040 RUN PING CHECK TASKS"
+      include_tasks: ping.yaml
+
+    - name: "1050 RUN DEVICE SSH AND PLATFORM DETECTION TASKS"
+      include_tasks: device_ssh.yaml
+      when: ping_reachable | bool
+
+    - name: "1060 RUN BGP STATE CHECK TASKS"
+      include_tasks: bgp_check.yaml
+      when: ping_reachable | bool and ssh_ok | bool
+
+    - name: "1065 DISCOVER VMANAGE AND AUTHENTICATE"
+      include_tasks: vmanage_discovery.yaml
+      when: ping_reachable | bool and ssh_ok | bool
+
+    - name: "1070 RUN NEIGHBOR PING TASKS"
+      include_tasks: neighbor_ping.yaml
+      when: ping_reachable | bool and ssh_ok | bool and not (bgp_all_up | bool)
+
+    # GAP 3 + GAP 4: Collect route/ARP/hold-timer/CPU/memory evidence
+    # when neighbor ping fails — before Tier-2 escalation
+    - name: "1073 RUN NEIGHBOR UNREACHABLE EVIDENCE COLLECTION"
+      include_tasks: neighbor_unreachable_evidence.yaml
+      when: >
+        ping_reachable | bool and
+        ssh_ok | bool and
+        not (bgp_all_up | bool) and
+        not (neighbor_reachable | bool) and
+        peer_sysip is defined and peer_sysip != ''
+
+    - name: "1075 RUN BGP REMEDIATION TASKS"
+      include_tasks: bgp_remediation.yaml
+      when: >
+        ping_reachable | bool and
+        ssh_ok | bool and
+        not (bgp_all_up | bool) and
+        neighbor_reachable | bool and
+        bgp_stuck_neighbors | length > 0 and
+        not (template_managed | bool)
+
+    - name: "1080 RUN BGP RECHECK AFTER CLEAR"
+      include_tasks: bgp_recheck.yaml
+      when: remediation_attempted | bool
+
+    - name: "1085 RUN INTERFACE CHECK TASKS"
+      include_tasks: interface_check.yaml
+      when: >
+        ping_reachable | bool and
+        ssh_ok | bool and
+        not (bgp_all_up | bool) and
+        not (bgp_recovered | bool) and
+        neighbor_reachable | bool
+
+    - name: "1090 RUN INTERFACE BOUNCE TASKS"
+      include_tasks: interface_bounce.yaml
+      when: interface_bounce_safe | bool
+
+    - name: "1095 RUN BGP RECHECK AFTER BOUNCE"
+      include_tasks: bgp_recheck.yaml
+      when: bounce_attempted | bool
+
+    - name: "1160 RUN ALARM CLEARANCE TASKS"
+      include_tasks: alarm_clearance.yaml
+      # Alarm clearance runs when vManage auth succeeded regardless of
+      # template_managed or closure_ready.
+      when: vmanage_authenticated | bool
+
+    - name: "1180 WRITE FORMATTED REPORT"
+      include_tasks: write_output.yaml
+
+    - name: "1190 READ OUTPUT.DAT"
+      ansible.builtin.shell: "cat {{ output_file }}"
+      register: output_content
+      delegate_to: localhost
+      changed_when: false
+
+    - set_fact:
+        response_msg: "{{ output_content.stdout | string }}"
+
+  rescue:
+    - name: "1200 READ OUTPUT.DAT IN RESCUE"
+      ansible.builtin.shell: "cat {{ output_file }}"
+      register: output_content
+      delegate_to: localhost
+      changed_when: false
+      ignore_errors: true
+
+    - set_fact:
+        status_code: 2
+        response_msg: "{{ output_content.stdout | default('Playbook execution failed. No output available.') | string }}. Engage NOC for manual troubleshooting."

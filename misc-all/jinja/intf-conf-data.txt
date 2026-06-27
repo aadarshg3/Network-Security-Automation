@@ -1,3 +1,0 @@
-interface Ethernet0/0
-description Connected to SW1
-duplex full

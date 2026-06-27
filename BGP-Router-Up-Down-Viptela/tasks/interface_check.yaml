@@ -1,0 +1,77 @@
+---
+- name: "1086 PARSE INTERFACE STATUS FROM DIAGNOSTIC BUNDLE — CEDGE"
+  set_fact:
+    interfaces_cedge: "{{ (bgp_diag_cedge.output | default({'show int description': ''})).get('show int description', '') | parse_interface_list_cedge }}"
+  when: platform == 'cedge' or platform == ''
+  ignore_errors: true
+
+- name: "1086B PARSE INTERFACE STATUS FROM DIAGNOSTIC BUNDLE — VEDGE"
+  set_fact:
+    interfaces_vedge: "{{ (bgp_diag_vedge.output | default({'show interface description': ''})).get('show interface description', '') | parse_interface_list_vedge }}"
+  when: platform == 'vedge'
+  ignore_errors: true
+
+- name: "1087 SET ACTIVE INTERFACE LIST"
+  set_fact:
+    all_interfaces: "{{ interfaces_cedge | default(interfaces_vedge | default([])) }}"
+
+- name: "1087B IDENTIFY LAN INTERFACES THAT ARE DOWN"
+  set_fact:
+    lan_down_interfaces: "{{ all_interfaces | select_lan_down_interfaces }}"
+
+- debug:
+    msg: "LAN down interfaces: {{ lan_down_interfaces }}"
+
+- name: "1088 SET BOUNCE INTERFACE IF SAFE"
+  set_fact:
+    bounce_interface: "{{ lan_down_interfaces | first }}"
+    interface_bounce_safe: true
+  when: >
+    lan_down_interfaces | length > 0 and
+    not (template_managed | bool)
+
+- name: "1088B SET ESCALATE — TEMPLATE MANAGED"
+  set_fact:
+    escalate_tier2: true
+  when: template_managed | bool and lan_down_interfaces | length > 0
+
+- name: "1088C SET ESCALATE — NO SAFE INTERFACE FOUND"
+  set_fact:
+    escalate_tier2: true
+  when: lan_down_interfaces | length == 0 and not (interface_bounce_safe | bool)
+
+- name: "1089 WRITE INTERFACE CHECK RESULT"
+  lineinfile:
+    path: "{{ output_file }}"
+    line: |
+      Interface Check:
+        - All interfaces found : {{ all_interfaces | length }}
+        - LAN + down/down      : {{ lan_down_interfaces | length }}
+        - Bounce target        : {{ bounce_interface if interface_bounce_safe | bool else 'None identified' }}
+        - Template managed     : {{ 'YES — no CLI bounce' if template_managed | bool else 'No' }}
+        - Action               : >
+            {{ 'Bounce will be attempted on: ' + bounce_interface if interface_bounce_safe | bool else
+               'Manual Action Required: Device is template-managed. Detach from vManage template, bounce interface, re-attach. Do NOT detach without NOC approval.' if template_managed | bool else
+               'No LAN/access interface found down — check WAN/circuit path. Manual Action Required: WAN-path failure detected. Refer to Circuit-Down MOP. Engage Tier-2.' }}
+  delegate_to: localhost
+
+# FIX v6 — informative message when interface data is unavailable
+- name: "1086C INTERFACE DATA UNAVAILABLE — WRITE WARNING"
+  block:
+    - debug:
+        msg: >
+          INTERFACE DATA: Not available for {{ MgmtIP }}.
+          Cause: Diagnostic bundle unavailable — interface check cannot run.
+          Impact: Interface bounce remediation is not possible.
+          NOC: manually check interface status on device.
+    - lineinfile:
+        path: "{{ output_file }}"
+        line: |
+          NOTE [INTERFACE CHECK]: Interface data unavailable — diagnostic bundle
+          did not return interface output. Interface bounce skipped.
+          NOC to check interface status manually if BGP remains down.
+        delegate_to: localhost
+  when: >
+    platform == 'vedge' and
+    bgp_diag_vedge is not defined and
+    not (bgp_all_up | default(false) | bool)

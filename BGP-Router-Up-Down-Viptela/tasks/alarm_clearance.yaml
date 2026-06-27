@@ -1,0 +1,116 @@
+---
+- name: "1164 QUERY VMANAGE ALARMS FOR THIS DEVICE"
+  ansible.builtin.uri:
+    url: "https://{{ vmanage_ip }}:{{ vmanagePort }}/dataservice/alarms"
+    method: POST
+    headers: "{{ vmanage_headers }}"
+    body_format: json
+    body:
+      query:
+        condition: "AND"
+        rules:
+          - value:
+              - "true"
+            field: "active"
+            type: "string"
+            operator: "in"
+          - value:
+              - "{{ DNSEntityName }}"
+            field: "host_name"
+            type: "string"
+            operator: "in"
+      size: 10000
+    validate_certs: no
+    return_content: yes
+    status_code: [200]
+  register: vmanage_alarms_response
+  delegate_to: localhost
+  no_log: true
+  failed_when: false
+  when: vmanage_authenticated | bool
+
+# BUG 1 fix — values is a LIST not a dict, remove selectattr
+# query already filtered by host_name — just extract all uuids directly
+- name: "1165 EXTRACT VMANAGE ALARM UUIDS"
+  set_fact:
+    alarm_uuids: "{{ vmanage_alarms_response.json.data | default([]) | map(attribute='uuid') | list }}"
+  when: >
+    vmanage_authenticated | bool and
+    vmanage_alarms_response.status is defined and
+    vmanage_alarms_response.status == 200
+
+# BUG 12 fix — distinguish "no alarm found" from "alarm cleared"
+- name: "1165B SET NO ALARM FLAG"
+  set_fact:
+    alarm_not_found: true
+    alarm_cleared: false
+  when: alarm_uuids | default([]) | length == 0
+
+- name: "1166 WRITE ALARM QUERY RESULT"
+  lineinfile:
+    path: "{{ output_file }}"
+    line: |
+      vManage Alarm Check:
+        - vManage IP    : {{ vmanage_ip | default('Not found') }}
+        - Auth Status   : {{ 'Authenticated' if vmanage_authenticated | bool else 'Failed' }}
+        - Active alarms : {{ alarm_uuids | default([]) | length }} found for {{ DNSEntityName }}
+        - Status        : {{ 'No active BGP alarm on vManage — may already be cleared or not yet generated' if alarm_uuids | default([]) | length == 0 else 'Active alarm(s) found — proceeding to clear' }}
+        - Assure1 ID    : {{ assureAlarmID }} (Assure1 clearance handled by internal tooling)
+  delegate_to: localhost
+
+- name: "1167 CLEAR VMANAGE ALARMS"
+  ansible.builtin.uri:
+    url: "https://{{ vmanage_ip }}:{{ vmanagePort }}/dataservice/alarms/clear"
+    method: POST
+    headers: "{{ vmanage_headers }}"
+    body_format: json
+    body:
+      alarm_uuid: "{{ item }}"
+    validate_certs: no
+    status_code: [200, 404]
+    return_content: yes
+  loop: "{{ alarm_uuids | default([]) }}"
+  loop_control:
+    label: "{{ item }}"
+  delegate_to: localhost
+  no_log: true
+  failed_when: false
+  register: alarm_clear_results
+  when: vmanage_authenticated | bool and alarm_uuids | default([]) | length > 0
+
+- name: "1168 CONFIRM ALARM CLEARED VIA UUID LOOKUP"
+  ansible.builtin.uri:
+    url: "https://{{ vmanage_ip }}:{{ vmanagePort }}/dataservice/alarms/uuid/{{ item }}"
+    method: GET
+    headers: "{{ vmanage_headers }}"
+    validate_certs: no
+    return_content: yes
+    status_code: [200, 404]
+  loop: "{{ alarm_uuids | default([]) }}"
+  loop_control:
+    label: "{{ item }}"
+  register: alarm_confirm_results
+  delegate_to: localhost
+  no_log: true
+  failed_when: false
+  when: vmanage_authenticated | bool and alarm_uuids | default([]) | length > 0
+
+# BUG 12 fix — alarm_cleared = true only when we actually sent clear AND got 200
+- name: "1169 SET ALARM CLEARED FLAG"
+  set_fact:
+    alarm_cleared: true
+  when: >
+    alarm_clear_results is defined and
+    alarm_clear_results.results | default([]) |
+    selectattr('status', 'equalto', 200) | list | length > 0
+
+- name: "1169B WRITE ALARM CLEAR RESULT"
+  lineinfile:
+    path: "{{ output_file }}"
+    line: |
+      vManage Alarm Clearance:
+        - Alarms processed : {{ alarm_uuids | default([]) | length }}
+        - Clear status     : {{ 'Cleared successfully' if alarm_cleared | default(false) | bool else 'No active alarm found on vManage — alarm may be auto-cleared or not yet generated' }}
+        - Note             : Manual Action Required: Check and clear Azure Monitor alert if present.
+        - Note             : Assure1 clearance handled by internal tooling (ID: {{ assureAlarmID }})
+  delegate_to: localhost

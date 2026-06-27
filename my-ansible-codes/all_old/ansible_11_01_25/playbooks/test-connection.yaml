@@ -1,8 +1,0 @@
----
-- name: Check Ansible connectivity to Cisco routers
-  hosts: all
-  gather_facts: no
-  tasks:
-    - name: Ping test (via Ansible ping module)
-      ping:
-

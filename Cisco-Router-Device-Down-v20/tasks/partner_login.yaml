@@ -1,0 +1,427 @@
+---
+# Cisco-Router-Device-Down — Secondary login + VRRP jump to primary.
+# Credentials use device_password_chain (TACACS first, then cinfo) resolved in
+# main.yaml. Lab overrides jump_user_override / jump_password_override take effect
+# only when set.
+
+- block:
+
+    - name: 1250 SECONDARY SSH — PROBE PRIMARY + READ VRRP
+      ansible.builtin.script: >
+        tasks/device_ssh.py
+        'platform={{ detected_platform | default('ios') }}'
+        '{{ partner_ip }}'
+        '{{ ansible_user }}'
+        '{{ ansible_password }}'
+        '{{ ["ping " + MgmtIP + " repeat 5 timeout 3",
+             "show vrrp brief",
+             "show vrrp",
+             "show standby brief",
+             "show ip interface brief",
+             "show interfaces description",
+             "show dying-gasp status",
+             "show logging | include Dying",
+             "show running-config | section vty",
+             "show running-config | include access-class",
+             "show ip access-lists"] | to_json }}'
+      args:
+        executable: python3
+      register: partner_ping_raw
+      no_log: true
+      delegate_to: localhost
+
+    - name: 1251 PARSE SECONDARY OUTPUT + DERIVE VRRP PRIMARY LAN IP
+      ansible.builtin.set_fact:
+        partner_ping_parsed: "{{ partner_ping_raw.stdout | safe_json_parse }}"
+        partner_ping_text: >-
+          {{ (partner_ping_raw.stdout | safe_json_parse).outputs.get(
+               "ping " + MgmtIP + " repeat 5 timeout 3", "") }}
+        partner_vrrp_text: >-
+          {{ (partner_ping_raw.stdout | safe_json_parse).outputs.get("show vrrp brief", "") }}
+        partner_standby_text: >-
+          {{ (partner_ping_raw.stdout | safe_json_parse).outputs.get("show standby brief", "") }}
+        partner_int_brief_text: >-
+          {{ (partner_ping_raw.stdout | safe_json_parse).outputs.get("show ip interface brief", "(not available)") }}
+        partner_int_desc_text: >-
+          {{ (partner_ping_raw.stdout | safe_json_parse).outputs.get("show interfaces description", "(not available)") }}
+        partner_dying_gasp_text: >-
+          {{ (partner_ping_raw.stdout | safe_json_parse).outputs.get("show dying-gasp status", "(not available)") }}
+        partner_dying_log_text: >-
+          {{ (partner_ping_raw.stdout | safe_json_parse).outputs.get("show logging | include Dying", "(no Dying entries)") }}
+        partner_vty_section_text: >-
+          {{ (partner_ping_raw.stdout | safe_json_parse).outputs.get("show running-config | section vty", "") }}
+        partner_access_class_text: >-
+          {{ (partner_ping_raw.stdout | safe_json_parse).outputs.get("show running-config | include access-class", "") }}
+        partner_ip_acl_text: >-
+          {{ (partner_ping_raw.stdout | safe_json_parse).outputs.get("show ip access-lists", "") }}
+
+    - name: 1252 DERIVE FHRP STATE AND PRIMARY JUMP TARGETS
+      ansible.builtin.set_fact:
+        fhrp_state: "{{ partner_vrrp_text | parse_fhrp_state(partner_standby_text, partner_ip) }}"
+        secondary_hostname: >-
+          {{ (partner_int_brief_text | regex_search('([A-Za-z0-9_.\\-]+)[#>]', '\\1') | first)
+             if (partner_int_brief_text | regex_search('([A-Za-z0-9_.\\-]+)[#>]')) else '' }}
+
+    - name: 1252A SET VIP AND JUMP TARGETS
+      ansible.builtin.set_fact:
+        vrrp_vip: "{{ fhrp_state.vip | default('') }}"
+        active_ip: "{{ fhrp_state.active_ip | default('') }}"
+        primary_jump_targets: "{{ fhrp_state | derive_primary_jump_targets(partner_ip) }}"
+        secondary_is_active: "{{ fhrp_state.secondary_is_active | default(false) }}"
+        vty_acl: >-
+          {{ partner_vty_section_text | parse_vty_acl(partner_access_class_text,
+             partner_ip_acl_text, partner_ip) }}
+        reachable_via_partner: >-
+          {{
+            (partner_ping_text | regex_search('Success rate is (\d+) percent', '\1') | first | int) > 0
+            if (partner_ping_text | regex_search('Success rate is (\d+) percent'))
+            else false
+          }}
+
+    # Dying-gasp "is it configured?" gate (MOP c2)
+    - name: 1253 EVALUATE DYING-GASP CONFIGURED
+      ansible.builtin.set_fact:
+        dying_gasp_configured: >-
+          {{ 'dying' in (partner_dying_gasp_text | lower)
+             and 'invalid' not in (partner_dying_gasp_text | lower)
+             and 'not ' not in (partner_dying_gasp_text | lower) }}
+        dying_gasp_seen: >-
+          {{ 'Dying' in partner_dying_log_text or 'dying' in (partner_dying_gasp_text | lower) }}
+
+    - name: 1254 LOG SECONDARY VERIFICATION
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          SECONDARY ROUTER VERIFICATION (jump-host path)
+          ============================================================
+          Secondary router : {{ partner_neid }} ({{ partner_ip }})
+          SSH to secondary : {{ 'SUCCESS' if partner_ping_parsed.success else 'FAILED' }}
+          Primary MgmtIP   : {{ MgmtIP }}  (management loopback — expected down)
+          FHRP protocol    : {{ fhrp_state.protocol | default('none') | upper }}
+          FHRP VIP         : {{ vrrp_vip if vrrp_vip else '(none found)' }}
+          Active (primary) : {{ active_ip if active_ip else '(not reported)' }}
+          Jump targets     : {{ primary_jump_targets | join(', ') if primary_jump_targets else '(none — cannot derive)' }}
+          {% if secondary_is_active | default(false) %}
+          ⚠️  FHRP ROLE SWAP: the SECONDARY currently holds the Active/Master role.
+              VIP {{ vrrp_vip }} resolves to the secondary, NOT the primary. This
+              indicates the primary has lost the FHRP role (likely uplink/tracking
+              fault). Jump to VIP cannot reach the primary in this state.
+          {% endif %}
+
+          {% if reachable_via_partner %}
+          [INFO] Primary MgmtIP pingable from secondary — management-plane path,
+          device likely UP. (Rare on this branch.)
+          {% endif %}
+
+          ── Primary reachability from secondary (FHRP path) ──
+          Jump target (VIP) : {{ primary_jump_targets | join(', ') if primary_jump_targets else '(none — no VIP parsed)' }}
+          ── Dying-gasp (MOP c2) ──
+          configured : {{ dying_gasp_configured }}
+          status     : {{ partner_dying_gasp_text }}
+          {% if dying_gasp_seen %}
+          DYING GASP DETECTED — primary likely lost power. Engage Tier-2 (power/HW).
+          {% elif not dying_gasp_configured %}
+          NOTE: Dying-gasp NOT configured — absence of dying logs is not conclusive.
+          {% endif %}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    # Rung: no VRRP VIP → cannot locate primary LAN IP → NOC
+    - name: 1255 ESCALATE WHEN NO VRRP PATH
+      ansible.builtin.set_fact:
+        escalation_needed: true
+        jump_outcome: "no_vrrp"
+        failed_phase: "partner_login"
+        failure_reason: >-
+          Secondary router reachable, but no VRRP/HSRP virtual IP could be read
+          from it (show standby/vrrp brief returned no VIP). Without the VIP the
+          automation cannot derive the primary's LAN IP to jump into it.
+        noc_next_action: >-
+          Log into the secondary {{ partner_ip }} manually, run 'show standby brief'
+          / 'show vrrp brief' to find the primary's LAN/VIP, then SSH to the primary
+          and collect diagnostics. Verify FHRP is configured at this site.
+      when: primary_jump_targets | length == 0
+
+    - name: 1255L LOG NO-VRRP ESCALATION
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+          [JUMP-HOST] Secondary reached, but no FHRP (HSRP/VRRP) virtual IP or
+          Active address could be read from it — cannot determine a primary jump
+          target. ENGAGE NOC for manual access to the primary.
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when: primary_jump_targets | length == 0
+
+    # Rung: ping each primary LAN candidate from the secondary
+    - name: 1256 PING PRIMARY LAN IP FROM SECONDARY
+      ansible.builtin.script: >
+        tasks/device_ssh.py
+        'platform={{ detected_platform | default('ios') }}'
+        '{{ partner_ip }}'
+        '{{ ansible_user }}'
+        '{{ ansible_password }}'
+        '{{ (primary_jump_targets | map("regex_replace", "^(.+)$", "ping \1 repeat 3 timeout 2") | list) | to_json }}'
+      args:
+        executable: python3
+      register: lan_ping_raw
+      no_log: true
+      delegate_to: localhost
+      when: primary_jump_targets | length > 0
+
+    - name: 1257 SELECT REACHABLE PRIMARY LAN IP
+      # Pick the first VRRP-derived candidate whose ping showed a non-zero
+      # success rate. Clean: match each candidate IP against the ping outputs.
+      ansible.builtin.set_fact:
+        primary_lan_ip: >-
+          {{ (primary_jump_targets
+              | select('in', lan_ping_reachable_ips)
+              | list
+              | first) if lan_ping_reachable_ips | length > 0 else '' }}
+      vars:
+        lan_ping_reachable_ips: >-
+          {{ (lan_ping_raw.stdout | safe_json_parse).outputs | default({}) | dict2items
+             | selectattr('value', 'search', 'Success rate is [1-9]')
+             | map(attribute='key')
+             | map('regex_replace', '^ping (\S+).*$', '\1')
+             | list }}
+      when:
+        - primary_jump_targets | length > 0
+        - lan_ping_raw is defined
+
+    - name: 1258 ESCALATE WHEN PRIMARY NOT LAN-REACHABLE
+      ansible.builtin.set_fact:
+        escalation_needed: true
+        jump_outcome: "lan_unreachable"
+        failed_phase: "partner_login"
+        failure_reason: >-
+          Primary is NOT reachable from the secondary on any FHRP jump target
+          ({{ primary_jump_targets | join(', ') }}). The secondary cannot ping the
+          primary's Active/VIP address, indicating a true hard-down (power loss /
+          device crash / site-wide issue) rather than a management-plane-only failure.{{ ' Dying-gasp evidence was collected.' if dying_gasp_seen | default(false) else (' Dying-gasp not configured on the secondary, so power-loss could not be confirmed from logs.' if not dying_gasp_configured | default(false) else '') }}
+        noc_next_action: >-
+          Treat as a likely hard-down. Dispatch a field engineer to check power and
+          physical state of {{ DNSEntityName }} ({{ MgmtIP }}). Review any dying-gasp
+          / syslog evidence captured above from the secondary {{ partner_ip }}.
+      when:
+        - primary_jump_targets | length > 0
+        - primary_lan_ip | default('') | length == 0
+
+    - name: 1258L LOG LAN-UNREACHABLE ESCALATION
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+          [JUMP-HOST] Secondary up; primary NOT reachable over LAN on any FHRP
+          target ({{ primary_jump_targets | join(', ') }}). Likely primary down
+          (power/physical) or LAN ACL.
+          FHRP: {{ fhrp_state.protocol | default('none') | upper }} VIP={{ vrrp_vip | default('none') }} Active={{ active_ip | default('none') }}
+          ENGAGE NOC team.
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when:
+        - primary_jump_targets | length > 0
+        - primary_lan_ip | default('') | length == 0
+
+    # Rung: jump SSH secondary -> primary via the reachable LAN IP
+    - name: 1259 JUMP SSH SECONDARY -> PRIMARY
+      ansible.builtin.script: >
+        tasks/jump_ssh.py
+        'secondary_hostname={{ secondary_hostname | default(partner_neid) }}'
+        'platform={{ detected_platform | default('ios') }}'
+        'jump_password_override={{ jump_password_override | default('') }}'
+        'jump_user_override={{ jump_user_override | default('') }}'
+        '{{ partner_ip }}'
+        '{{ ansible_user }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ primary_lan_ip }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ ["show version",
+             "show logging | include reload",
+             "ping " + (vrrp_vip | default(primary_lan_ip)) + " repeat 5 timeout 2",
+             "show " + ("standby" if (fhrp_state.protocol | default("hsrp")) == "hsrp" else "vrrp") + " brief",
+             "show " + ("standby" if (fhrp_state.protocol | default("hsrp")) == "hsrp" else "vrrp"),
+             "show ip interface brief",
+             "show ip route",
+             "show interfaces description",
+             "show ip bgp summary",
+             "show processes cpu sorted | exclude 0.0",
+             "show logging | include Dying"] | to_json }}'
+      args:
+        executable: python3
+      register: jump_raw
+      no_log: true
+      delegate_to: localhost
+      when: primary_lan_ip | default('') | length > 0
+
+    - name: 1260 PARSE JUMP RESULT
+      ansible.builtin.set_fact:
+        jump_parsed: "{{ jump_raw.stdout | safe_json_parse }}"
+      when: jump_raw is defined
+
+    # Platform detection for the remediation path.
+    # platform_detection.yaml only runs when primary_reachable=True (direct SSH).
+    # On the secondary-jump path (primary_reachable=False), show version was already
+    # collected by jump_ssh.py (task 1259 includes it). Extract platform here so
+    # all subsequent remediation phases use the correct command syntax.
+    - name: 1260A DETECT PLATFORM FROM JUMP SHOW VERSION
+      ansible.builtin.set_fact:
+        detected_platform: "{{ (jump_parsed.outputs | default({})).get('show version', '') | extract_platform }}"
+      when:
+        - jump_raw is defined
+        - jump_parsed.success | default(false)
+        - (jump_parsed.outputs | default({})).get('show version', '') | length > 0
+
+    - name: 1261 LOG JUMP OUTCOME + HANDOFF
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          JUMP SSH (secondary -> primary via {{ primary_lan_ip }})
+          ============================================================
+          {% if jump_parsed.success | default(false) %}
+          [JUMP-HOST] LANDED ON PRIMARY (verified via {{ primary_lan_ip }}).
+          {% if active_ip and primary_lan_ip == active_ip %}
+          Primary is FHRP Active and alive on its LAN IP — its management loopback
+          ({{ MgmtIP }}) is down but the device itself is UP. This is a
+          MANAGEMENT-PLANE-ONLY failure, not a hard-down.
+          {% elif vrrp_vip and primary_lan_ip == vrrp_vip %}
+          Reached the primary through the FHRP virtual IP {{ vrrp_vip }} (served by
+          the Active node). Device is UP; management loopback {{ MgmtIP }} is down —
+          a MANAGEMENT-PLANE-ONLY failure, not a hard-down.
+          {% endif %}
+          This was a read-only diagnostic landing. Any remediation (WAN bounce,
+          BGP clear) runs as a separate gated phase only when armed. Hand to NOC
+          team with this evidence.
+
+          {% for cmd, out in (jump_parsed.outputs | default({})).items() %}
+          --- {{ cmd }} ---
+          {{ out }}
+          {% endfor %}
+          {% elif jump_parsed.connection_refused | default(false) %}
+          [JUMP-HOST] Secondary up, primary pingable, but SSH was BLOCKED BY ACL
+          ("Connection refused by remote host") on {{ primary_lan_ip }}.
+          This is the common case (VTY ACL restriction). No automated access possible. ENGAGE NOC team.
+          Trail: {{ jump_parsed.detail | default('') }}
+          {% else %}
+          [JUMP-HOST] Could not establish a verified session on the primary via
+          {{ primary_lan_ip }}. Stage: {{ jump_parsed.stage | default('unknown') }}.
+          Reason: {{ jump_parsed.error | default('jump not completed / landing unverified') }}.
+          ENGAGE NOC team for manual access.
+          Trail: {{ jump_parsed.detail | default('') }}
+          {% endif %}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when: jump_raw is defined
+
+    - name: 1262 SET JUMP ESCALATION + PHASE
+      ansible.builtin.set_fact:
+        escalation_needed: "{{ not (jump_parsed.success | default(false)) }}"
+        jump_outcome: "{{ 'landed' if jump_parsed.success | default(false) else ('acl_refused' if jump_parsed.connection_refused | default(false) else 'jump_failed') }}"
+        phase_results: "{{ phase_results | combine({'partner_login': 'ok'}) }}"
+      when: jump_raw is defined
+
+    - name: 1262A SET JUMP FAILURE CONTEXT (ACL REFUSED)
+      ansible.builtin.set_fact:
+        failed_phase: "partner_login"
+        failure_reason: >-
+          Secondary reached the primary at the network layer, but the SSH jump from
+          secondary {{ partner_ip }} to primary {{ primary_lan_ip }} was REFUSED —
+          consistent with a VTY ACL on the primary blocking SSH from the secondary.
+          This is expected at ~90% of sites and is not a device-down condition.
+          ACL evidence from the secondary ({{ partner_ip }}):
+          {{ vty_acl.summary | default('no VTY/ACL config retrieved from secondary') }}.
+          {% if vty_acl.acl_name | default('') %}Bound ACL: {{ vty_acl.acl_name }}
+          ({{ vty_acl.vty_lines | default([]) | join(', ') }}).
+          {% if vty_acl.acl_rules | default([]) | length > 0 %}Rules: {{ vty_acl.acl_rules | join(' / ') }}.{% endif %}
+          {% if vty_acl.secondary_permitted is defined and vty_acl.secondary_permitted is not none %}Secondary source {{ partner_ip }} {{ 'IS' if vty_acl.secondary_permitted else 'is NOT' }} explicitly matched by the ACL.{% endif %}
+          {% endif %}
+        noc_next_action: >-
+          The primary appears alive (reachable from secondary) but is not SSH-accessible
+          via the secondary due to ACL. The secondary's VTY policy is shown above as the
+          best-available evidence (the primary is provisioned from the same template).
+          Verify the primary's VTY access-class / ACL via an approved path, confirm the
+          secondary's jump source is permitted, and check whether the original alarm was a
+          transient management-plane blip.
+      when:
+        - jump_raw is defined
+        - not (jump_parsed.success | default(false))
+        - jump_parsed.connection_refused | default(false)
+
+    - name: 1262B SET JUMP FAILURE CONTEXT (JUMP FAILED)
+      ansible.builtin.set_fact:
+        failed_phase: "partner_login"
+        failure_reason: >-
+          The SSH jump from secondary {{ partner_ip }} to primary {{ primary_lan_ip }}
+          did not complete (no exec prompt / landing not verified). Cause may be
+          credentials, an unexpected banner/prompt, or the primary being unresponsive
+          at the application layer despite being pingable.
+        noc_next_action: >-
+          Manually SSH from secondary {{ partner_ip }} to primary {{ primary_lan_ip }}
+          to confirm reachability and collect diagnostics. Verify cinfo credentials are
+          valid for this site.
+      when:
+        - jump_raw is defined
+        - not (jump_parsed.success | default(false))
+        - not (jump_parsed.connection_refused | default(false))
+
+    # FHRP role swap. If the SECONDARY currently holds the Active/Master
+    # role, the VIP resolves to the secondary, not the primary — so the jump to
+    # the VIP could never land on the primary. This is itself diagnostic: the
+    # primary has lost the FHRP role, which on a managed CE typically means an
+    # uplink/interface-tracking decrement or the primary control plane is down.
+    # This overrides the generic jump-failed message with a specific finding.
+    - name: 1262C SET JUMP FAILURE CONTEXT (FHRP ROLE SWAP — SECONDARY IS ACTIVE)
+      ansible.builtin.set_fact:
+        failed_phase: "partner_login"
+        failure_reason: >-
+          The {{ fhrp_state.protocol | default('FHRP') | upper }} Active/Master role is
+          currently held by the SECONDARY ({{ partner_ip }}), not the primary. The VIP
+          {{ vrrp_vip }} therefore resolves to the secondary, so an SSH jump to the VIP
+          cannot reach the primary. The primary losing the FHRP role indicates a likely
+          uplink/interface-tracking decrement on the primary (tracked WAN/MPLS interface
+          down) or a primary control-plane failure — not merely a management-plane blip.
+        noc_next_action: >-
+          Treat the primary as degraded: its FHRP priority has dropped below the
+          secondary. Check the primary's tracked uplink (WAN/MPLS) and interface-tracking
+          config via an approved path, and inspect the secondary's
+          'show {{ fhrp_state.protocol | default('standby') }} brief' (VIP {{ vrrp_vip }},
+          secondary is Active). Engage NOC for primary uplink/hardware investigation.
+      when:
+        - jump_raw is defined
+        - not (jump_parsed.success | default(false))
+        - secondary_is_active | default(false)
+
+    - name: 1263 MARK PARTNER PHASE OK (NON-JUMP EXITS)
+      ansible.builtin.set_fact:
+        phase_results: "{{ phase_results | combine({'partner_login': 'ok'}) }}"
+      when: jump_raw is not defined
+
+  rescue:
+    - name: 1250R SECONDARY/JUMP RESCUE
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          [SECONDARY/JUMP] PHASE FAILED — {{ partner_neid | default('?') }} ({{ partner_ip | default('?') }})
+          ============================================================
+          Could not log in to the secondary router, or an error occurred during
+          the VRRP jump to the primary. Primary state could not be confirmed via
+          the customer-side path. ENGAGE NOC team for manual access to the primary.
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    - name: 1250R SET PARTNER FAILED
+      ansible.builtin.set_fact:
+        reachable_via_partner: false
+        jump_outcome: "secondary_ssh_failed"
+        phase_results: "{{ phase_results | combine({'partner_login': 'failed'}) }}"
+        escalation_needed: true

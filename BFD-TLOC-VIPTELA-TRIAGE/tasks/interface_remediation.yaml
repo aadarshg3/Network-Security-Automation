@@ -1,0 +1,115 @@
+---
+- name: "1141 CHECK TEMPLATE MEMBERSHIP (VEDGE)"
+  ansible.builtin.script:
+    executable: /usr/bin/python3
+    cmd: >
+      roles/BFD-TLOC-VIPTELA-TRIAGE/tasks/bfd_ssh.py
+      '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}", "password": "{{ ansible_password }}", "device_type": "cisco_ios", "commands": ["show system status"]}'
+  register: tmpl_raw_vedge
+  when: platform == 'vedge'
+  delegate_to: localhost
+  no_log: true
+  ignore_errors: true
+
+- name: "1142 CHECK TEMPLATE MEMBERSHIP (CEDGE)"
+  ansible.builtin.script:
+    executable: /usr/bin/python3
+    cmd: >
+      roles/BFD-TLOC-VIPTELA-TRIAGE/tasks/bfd_ssh.py
+      '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}", "password": "{{ ansible_password }}", "device_type": "cisco_ios", "commands": ["show sdwan system status"]}'
+  register: tmpl_raw_cedge
+  when: platform == 'cedge'
+  delegate_to: localhost
+  no_log: true
+  ignore_errors: true
+
+- name: "1143 PARSE TEMPLATE STATUS (VEDGE)"
+  set_fact:
+    tmpl_parsed_vedge: "{{ tmpl_raw_vedge.stdout | from_json }}"
+  when: platform == 'vedge' and tmpl_raw_vedge.stdout is defined
+  ignore_errors: true
+
+- name: "1143B PARSE TEMPLATE STATUS (CEDGE)"
+  set_fact:
+    tmpl_parsed_cedge: "{{ tmpl_raw_cedge.stdout | from_json }}"
+  when: platform == 'cedge' and tmpl_raw_cedge.stdout is defined
+  ignore_errors: true
+
+- name: "1144 DETERMINE TEMPLATE MANAGED"
+  set_fact:
+    template_managed: >-
+      {{
+        (tmpl_parsed_vedge.output | default({})) | is_template_managed
+        if platform == 'vedge'
+        else (tmpl_parsed_cedge.output | default({})) | is_template_managed
+      }}
+
+- name: "1144B WARN — TEMPLATE STATUS UNAVAILABLE"
+  block:
+    - debug:
+        msg: >
+          TEMPLATE STATUS UNAVAILABLE for {{ MgmtIP }}.
+          NOC: SSH to device and run 'show system status' (vedge) or
+          'show sdwan system status' (cedge) before any CLI bounce.
+    - lineinfile:
+        path: "{{ output_file }}"
+        line: |
+          WARNING [TEMPLATE CHECK]: Could not determine template-managed state.
+            NOC: Confirm template attachment manually before any CLI bounce.
+      delegate_to: localhost
+  when: tmpl_parsed_vedge is not defined and tmpl_parsed_cedge is not defined
+
+- name: "1145 INITIALIZE BOUNCE STATE"
+  set_fact:
+    bounce_failed: false
+
+- name: "1146 BOUNCE INTERFACE CLI (CEDGE NOT TEMPLATE)"
+  block:
+    - name: "1146A RUN BOUNCE COMMANDS (CEDGE)"
+      ansible.builtin.script:
+        executable: /usr/bin/python3
+        cmd: >
+          roles/BFD-TLOC-VIPTELA-TRIAGE/tasks/bfd_ssh.py
+          '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}", "password": "{{ ansible_password }}", "device_type": "cisco_ios", "config_commands": ["config-transaction", "interface {{ interface_status.name | default('') }}", "shutdown", "commit", "config-transaction", "interface {{ interface_status.name | default('') }}", "no shutdown", "commit"]}'
+      register: bounce_cedge
+      delegate_to: localhost
+      no_log: true
+  rescue:
+    - set_fact:
+        bounce_failed: true
+    - lineinfile:
+        path: "{{ output_file }}"
+        line: |
+          WARNING [BOUNCE FAILED]: CLI shut/no-shut on {{ interface_status.name | default('?') }} failed (cedge).
+            NOC: SSH to device and run the bounce sequence manually.
+      delegate_to: localhost
+    - ansible.builtin.meta: clear_host_errors
+  when: not (template_managed | bool) and platform == 'cedge' and interface_status.name is defined
+
+- name: "1147 BOUNCE INTERFACE CLI (VEDGE NOT TEMPLATE)"
+  block:
+    - name: "1147A RUN BOUNCE COMMANDS (VEDGE)"
+      ansible.builtin.script:
+        executable: /usr/bin/python3
+        cmd: >
+          roles/BFD-TLOC-VIPTELA-TRIAGE/tasks/bfd_ssh.py
+          '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}", "password": "{{ ansible_password }}", "device_type": "cisco_ios", "config_commands": ["config", "interface {{ interface_status.name | default('') }}", "shutdown", "commit", "no shutdown", "commit"]}'
+      register: bounce_vedge
+      delegate_to: localhost
+      no_log: true
+  rescue:
+    - set_fact:
+        bounce_failed: true
+    - lineinfile:
+        path: "{{ output_file }}"
+        line: |
+          WARNING [BOUNCE FAILED]: CLI shut/no-shut on {{ interface_status.name | default('?') }} failed (vedge).
+            NOC: SSH to device and run the bounce sequence manually.
+      delegate_to: localhost
+    - ansible.builtin.meta: clear_host_errors
+  when: not (template_managed | bool) and platform == 'vedge' and interface_status.name is defined
+
+- name: "1148 SET REMEDIATION ATTEMPTED"
+  set_fact:
+    remediation_attempted: true
+  when: not (template_managed | bool)

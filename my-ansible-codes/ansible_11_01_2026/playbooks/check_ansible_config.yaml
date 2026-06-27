@@ -1,9 +1,0 @@
----
-- hosts: localhost
-  gather_facts: false
-  tasks:
-    - name: 1010 PRINT ANSIBLE CONFIG LOCATION
-      ansible.builtin.debug:  
-        msg: 
-          - "{{ ansible_config_file }}"
-          - "{{ ansible_facts }}"

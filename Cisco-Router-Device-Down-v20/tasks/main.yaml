@@ -1,0 +1,231 @@
+---
+# Cisco-Router-Device-Down — orchestrator (Device-Down-Master role).
+# Contract to master_vz_template.yml: this role must ALWAYS finish with
+# response_msg, status_codes, iautomate_success and escalation_needed set.
+
+- name: 1000 RESOLVE WORKSPACE PATH
+  ansible.builtin.set_fact:
+    iAutomate_INV_WS: "{{ iAutomate_INV_WS | default(playbook_dir, true) }}"
+
+- block:
+
+    - name: 1001 INITIALIZE OUTPUT FILE
+      ansible.builtin.copy:
+        content: ""
+        dest: "{{ iAutomate_INV_WS }}/output.dat"
+        force: true
+      delegate_to: localhost
+
+    - name: 1002 SET RUN-LEVEL DEFAULTS
+      ansible.builtin.set_fact:
+        primary_reachable:        false
+        partner_found:            false
+        partner_neid:             ""
+        partner_ip:               ""
+        primary_lan_ip:           ""   # set by partner_login; required for jump_ssh remediation
+        reachable_via_partner:    false
+        detected_platform:        "ios"
+        wan_interface:            ""
+        wan_confidence:           "low"
+        wan_state:                "unknown"
+        bounce_attempted:         false
+        post_bounce_reachable:    false   # set by wan_check; gates routing/BGP/PE phases
+        has_bgp:                  false
+        has_static:               false
+        static_default_next_hop:  ""
+        stuck_neighbors:          []
+        bgp_clear_attempted:      false
+        post_bgp_reachable:       false
+        static_post_reachable:    false
+        pe_ip:                    ""
+        pe_confidence:            "none"
+        pe_reachable:             false
+        pe_arp_present:           false
+        device_verified_up:       false
+        escalation_needed:        false
+        # Failure-context facts: set by whichever phase fails, consumed by closure
+        # to write a precise NOC escalation note (where it failed, why, what next).
+        failed_phase:             ""
+        failure_reason:           ""
+        noc_next_action:          ""
+        pre_running_config:       ""
+        post_running_config:      ""
+        config_diff_output:       ""
+        pre_snapshot_success:     false
+        post_snapshot_success:    false
+        # Two gates must BOTH be armed for destructive actions:
+        #   run_primary_remediation = true  (enable the remediation tree)
+        #   read_only_mode          = false (allow writes — in vars/main.yaml)
+        # In lab_mode both arm automatically so the remediation tree runs in SIT;
+        # in production (lab_mode=false) this stays false and gates remediation off.
+        # The remediation phases also require primary_lan_ip to be set (the
+        # VRRP/LAN IP the secondary can reach), so all SSH goes through jump_ssh.py
+        # and never directly to the unreachable MgmtIP.
+        run_primary_remediation:  "{{ true if (lab_mode | bool) else false }}"
+        reachable_closeout_done:  false
+        phase_results:
+          input_gathering:       pending
+          primary_reachability:  pending
+          partner_discovery:     skipped
+          partner_login:         skipped
+          platform_detection:    skipped
+          reachable_closeout:    skipped
+          pre_config_snapshot:   skipped
+          wan_check:             skipped
+          routing_analysis:      skipped
+          bgp_remediation:       skipped
+          pe_check:              skipped
+          diagnostics:           skipped
+          closure:               pending
+
+    - name: 1003 RESOLVE CINFO PASSWORD CHAIN
+      ansible.builtin.set_fact:
+        cinfo_password_chain: >-
+          {{ cinfo_password_chain | default([])
+             + ( (credentials[('cinfo_' + (cinfo_idx | string))] | default([]))
+                 | map(attribute='password') | select('defined') | list ) }}
+      loop: "{{ (CinfoCredentials | default('') | string).split(',') | map('trim') | select('match', '^[0-9]+$') | list }}"
+      loop_control:
+        loop_var: cinfo_idx
+      no_log: true
+      when: credentials is defined
+
+    - name: 1003A BUILD DEVICE PASSWORD CHAIN (TACACS FIRST, THEN CINFO)
+      ansible.builtin.set_fact:
+        device_password_chain: >-
+          {{ ([ansible_password] + (cinfo_password_chain | default([]))) | unique | list }}
+      no_log: true
+
+    - name: include_tasks
+      ansible.builtin.include_tasks: input_gathering.yaml
+
+    - name: include_tasks
+      ansible.builtin.include_tasks: primary_reachability.yaml
+
+    - name: include_tasks
+      ansible.builtin.include_tasks: partner_discovery.yaml
+      when: not primary_reachable
+
+    - name: include_tasks
+      ansible.builtin.include_tasks: partner_login.yaml
+      when:
+        - not primary_reachable
+        - partner_found
+
+    # Platform detection via direct SSH — only valid when primary is reachable.
+    # On the unreachable path, platform is set in partner_login.yaml from the
+    # jump session's 'show version' output (task 1260A).
+    - name: include_tasks
+      ansible.builtin.include_tasks: platform_detection.yaml
+      when: primary_reachable
+
+    # MOP "ping = YES" terminal leaf: collect validation logs and close.
+    - name: include_tasks
+      ansible.builtin.include_tasks: reachable_closeout.yaml
+      when: primary_reachable
+
+    # ── Remediation tree ────────────────────────────────────────────────────
+    # Requires BOTH gates: run_primary_remediation=true AND primary_lan_ip set.
+    # primary_lan_ip is populated by partner_login (jump session). If it is
+    # empty (no VRRP path was established), the jump session cannot be used and
+    # these phases must not run.
+    #
+    # After a successful WAN bounce (post_bounce_reachable=True),
+    # the MOP says close immediately — do NOT continue into routing/BGP/PE.
+    # Only wan_check itself runs unconditionally (it is what produces the flag).
+
+    - name: include_tasks
+      ansible.builtin.include_tasks: pre_config_snapshot.yaml
+      when:
+        - run_primary_remediation
+        - primary_lan_ip | default('') | length > 0
+
+    - name: include_tasks
+      ansible.builtin.include_tasks: wan_check.yaml
+      when:
+        - run_primary_remediation
+        - primary_lan_ip | default('') | length > 0
+
+    # Skip routing/BGP/PE/diagnostics when WAN bounce already recovered the device.
+    - name: include_tasks
+      ansible.builtin.include_tasks: routing_analysis.yaml
+      when:
+        - run_primary_remediation
+        - primary_lan_ip | default('') | length > 0
+        - not post_bounce_reachable | default(false)
+
+    - name: include_tasks
+      ansible.builtin.include_tasks: bgp_remediation.yaml
+      when:
+        - run_primary_remediation
+        - has_bgp
+        - stuck_neighbors | length > 0
+        - primary_lan_ip | default('') | length > 0
+        - not post_bounce_reachable | default(false)
+
+    - name: include_tasks
+      ansible.builtin.include_tasks: pe_check.yaml
+      when:
+        - run_primary_remediation
+        - primary_lan_ip | default('') | length > 0
+        - not post_bounce_reachable | default(false)
+
+    - name: include_tasks
+      ansible.builtin.include_tasks: diagnostics.yaml
+      when:
+        - run_primary_remediation
+        - primary_lan_ip | default('') | length > 0
+        - not post_bounce_reachable | default(false)
+
+    - name: include_tasks
+      ansible.builtin.include_tasks: closure.yaml
+
+  rescue:
+
+    - name: OUTER RESCUE SET RETURN CONTRACT
+      ansible.builtin.set_fact:
+        status_codes:       "2"
+        escalation_needed:  true
+        device_verified_up: false
+        iautomate_success:  false
+        response_msg: >-
+          Automation failed with an unhandled exception before completion —
+          device state UNKNOWN. See output.dat in the Jenkins workspace and
+          escalate to NOC team.
+
+    - name: OUTER RESCUE APPEND DETAIL
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          [AUTOMATION ERROR] UNHANDLED EXCEPTION — ESCALATE TO NOC
+          ============================================================
+          The automation failed before completing all phases. Device state is UNKNOWN.
+
+          Last known facts:
+            Primary reachable  : {{ primary_reachable | default('unknown') }}
+            Platform           : {{ detected_platform | default('unknown') }}
+            WAN interface      : {{ wan_interface | default('') if wan_interface | default('') else 'NOT IDENTIFIED' }}
+            Bounce attempted   : {{ bounce_attempted | default(false) }}
+            BGP clear attempted: {{ bgp_clear_attempted | default(false) }}
+
+          NOC action required:
+            1. SSH to {{ MgmtIP | default('the device') }} and verify state manually.
+            2. Review Jenkins Build {{ lookup('env','BUILD_NUMBER') | default('N/A') }}.
+            3. Assign to NOC team if the device is unreachable from the management plane.
+          Automation completed with errors. status_codes=2
+        insertafter: EOF
+        create: true
+      delegate_to: localhost
+      ignore_errors: true
+
+  always:
+
+    - name: GUARANTEE RETURN CONTRACT
+      ansible.builtin.set_fact:
+        status_codes:       "{{ status_codes | default('2') }}"
+        response_msg:       "{{ response_msg | default('Automation finished without an explicit result — escalate to NOC team.') }}"
+        iautomate_success:  "{{ iautomate_success | default(false) }}"
+        escalation_needed:  "{{ escalation_needed | default(true) }}"
+        device_verified_up: "{{ device_verified_up | default(false) }}"

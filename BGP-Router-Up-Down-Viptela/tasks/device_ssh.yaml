@@ -1,0 +1,287 @@
+---
+# v10 gaps fixed:
+# GAP 1  — SSH failure reason classified (no-route / auth / timeout)
+# GAP 2  — show running-config vpn X router bgp added to vEdge bundle
+# GAP 6  — show running-config | section bgp added to cEdge bundle
+# GAP 7  — full show ip bgp neighbors <peer> (no | include BGP filter) added to cEdge bundle
+# GAP 8  — show ip routes vpn X (all routes) added to vEdge; show ip route <peer> to cEdge
+# GAP 9  — show log | i BGP + show logging | i BGP (fallback pair) added to vEdge bundle
+# v14    — All vEdge commands verified on live vEdge 20.3.1 and 20.3.8
+# v16    — vEdge: host-specific IP/32 route lookup unsupported; all-routes used
+#           vEdge: show log = syslog content; show logging = logging config (both sent)
+#           vEdge: show bgp neighbor (no per-peer IP form exists on vEdge 20.x)
+- name: "1051 CHECK SSH PORT REACHABILITY"
+  wait_for:
+    host: "{{ MgmtIP }}"
+    port: 22
+    timeout: 5
+  register: ssh_port_check
+  ignore_errors: true
+  delegate_to: localhost
+
+- name: "1052 ATTEMPT SSH — SHOW VERSION AND SYSTEM STATUS"
+  ansible.builtin.script:
+    executable: /usr/bin/python3
+    cmd: >
+      roles/BGP-Router-Up-Down-Viptela/tasks/bgp_ssh.py
+      '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}",
+        "password": "{{ ansible_password }}", "device_type": "cisco_ios",
+        "commands": ["show version", "show system status", "show sdwan system status"]}'
+  register: show_version_raw
+  when: ssh_port_check is succeeded
+  delegate_to: localhost
+  no_log: true
+  ignore_errors: true
+
+# GAP 1 — Classify SSH failure reason from stdout/stderr of bgp_ssh.py result
+# bgp_ssh.py returns JSON with failed=true and msg field on errors.
+# We parse msg to classify no-route vs auth vs timeout vs unknown.
+# BUG 4 FIX: from_json on non-JSON stdout raises AnsibleFilterError.
+# Guard: only call from_json when stdout is non-empty AND begins with '{' (JSON object).
+# If stdout is partial/non-JSON, fall back to show_version_raw.msg (Ansible module msg).
+# ignore_errors: true prevents this classification task from crashing the play —
+# the worst outcome is ssh_failure_reason stays 'none', which is safe.
+- name: "1052A CLASSIFY SSH FAILURE REASON"
+  set_fact:
+    ssh_failure_reason: >-
+      {%- if ssh_port_check is failed -%}
+      port_closed
+      {%- elif show_version_raw is defined and show_version_raw.failed | default(false) | bool -%}
+        {%- set raw_stdout = show_version_raw.stdout | default('') -%}
+        {%- set is_json = raw_stdout | length > 0 and raw_stdout | trim | first == '{' -%}
+        {%- set msg = (raw_stdout | from_json).get('msg', '') | lower
+                      if is_json
+                      else show_version_raw.msg | default('') | lower -%}
+        {%- if 'no route' in msg or 'network is unreachable' in msg or 'connection refused' in msg -%}
+        no_route
+        {%- elif 'authentication' in msg or 'permission denied' in msg or 'tacacs' in msg or 'invalid credentials' in msg -%}
+        auth_failed
+        {%- elif 'timed out' in msg or 'timeout' in msg or 'read_timeout' in msg -%}
+        timeout
+        {%- else -%}
+        unknown
+        {%- endif -%}
+      {%- else -%}
+      none
+      {%- endif -%}
+  when: ssh_port_check is defined
+  ignore_errors: true
+
+- name: "1052B SET SSH OK FROM ACTUAL SSH RESULT"
+  set_fact:
+    ssh_ok: "{{ show_version_raw is defined
+                and show_version_raw.failed == false
+                and show_version_raw.stdout is defined
+                and show_version_raw.stdout | length > 0 }}"
+  when: ssh_port_check is succeeded
+
+- name: "1052C SSH FAILED — PORT CLOSED"
+  set_fact:
+    ssh_ok: false
+  when: ssh_port_check is failed
+
+- name: "1053 SET ESCALATE IF SSH FAILED"
+  set_fact:
+    escalate_tier2: true
+    escalate_reason: "ssh_failed"
+  when: not (ssh_ok | bool)
+
+# GAP 1 — Write SSH failure reason to output with actionable guidance per reason
+- name: "1053B WRITE SSH FAILURE REASON TO OUTPUT"
+  lineinfile:
+    path: "{{ output_file }}"
+    line: |
+      SSH Failure Analysis:
+        - Failure type : {{ ssh_failure_reason | default('unknown') | upper }}
+        {% if ssh_failure_reason | default('') == 'port_closed' %}
+        - Diagnosis    : TCP port 22 did not respond within 5 seconds.
+                         Device may be unreachable at network layer.
+        - NOC Action   : Verify routing to {{ MgmtIP }}. Check if management
+                         interface is up on the device. Engage Tier-2.
+        {% elif ssh_failure_reason | default('') == 'no_route' %}
+        - Diagnosis    : SSH returned 'no route to host' or 'connection refused'.
+                         Device IP {{ MgmtIP }} is not routable from Jenkins agent.
+        - NOC Action   : Check routing table on Jenkins agent for {{ MgmtIP }}.
+                         Verify management VRF and interface. Engage Tier-2.
+        {% elif ssh_failure_reason | default('') == 'auth_failed' %}
+        - Diagnosis    : SSH connected but authentication failed.
+                         TACACS or local credentials are incorrect or expired.
+        - NOC Action   : Verify ansible_user credentials against TACACS server.
+                         Check if TACACS server is reachable. Engage Tier-2.
+        {% elif ssh_failure_reason | default('') == 'timeout' %}
+        - Diagnosis    : SSH connection timed out. Device TCP stack responded
+                         but did not complete SSH handshake. May be overloaded.
+        - NOC Action   : Ping device manually to verify layer-3 reachability.
+                         If pingable, device may have high CPU. Engage Tier-2.
+        {% else %}
+        - Diagnosis    : SSH failed for unknown reason.
+        - NOC Action   : SSH to {{ MgmtIP }} manually and investigate. Engage Tier-2.
+        {% endif %}
+  delegate_to: localhost
+  when: not (ssh_ok | bool) and ssh_failure_reason | default('none') != 'none'
+
+- name: "1055 PARSE SHOW VERSION RESULT"
+  set_fact:
+    show_version_result: "{{ show_version_raw.stdout | from_json }}"
+  when: ssh_ok | bool and show_version_raw.stdout is defined
+
+- name: "1056 SET PLATFORM FROM SHOW VERSION OUTPUT"
+  set_fact:
+    platform: "{{ show_version_result.output | default({}) | detect_platform_from_output }}"
+  when: ssh_ok | bool and show_version_result is defined and show_version_result.output is defined
+
+- name: "1056B PLATFORM FALLBACK FROM INVENTORY MAKE"
+  set_fact:
+    platform: "{{ make | default('') | detect_platform_from_make }}"
+  when: ssh_ok | bool and (platform is not defined or platform == '')
+
+- name: "1056C PLATFORM FINAL FALLBACK — DEFAULT VEDGE"
+  set_fact:
+    platform: "vedge"
+  when: ssh_ok | bool and (platform is not defined or platform == '')
+
+- debug:
+    msg: "Platform detected: {{ platform | upper }}"
+  when: ssh_ok | bool
+
+# GAP 2 — show running-config vpn X router bgp (vEdge BGP config per VPN)
+# GAP 6 — Added: show running-config | section bgp (cEdge BGP config)
+# GAP 7 — Full: show ip bgp neighbors <peer> (no | include BGP filter)
+# v12    — Fixed: vpnv4 all instead of vpnv4 vrf <id> because cEdge VRF name
+#          does not match vpn_id number. vpnv4 all searches across all VRFs.
+# GAP 8 — Added: show ip route <peer_sysip>
+- name: "1057 RUN FULL DIAGNOSTIC BUNDLE — CEDGE"
+  ansible.builtin.script:
+    executable: /usr/bin/python3
+    cmd: >
+      roles/BGP-Router-Up-Down-Viptela/tasks/bgp_ssh.py
+      '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}",
+        "password": "{{ ansible_password }}",
+        "enable_password": "{{ ansible_password }}",
+        "device_type": "cisco_ios",
+        "commands": [
+          "show version",
+          "show ip int brief",
+          "show int description",
+          "show vrrp",
+          "show arp",
+          "show sdwan system status",
+          "show sdwan system on-demand",
+          "show sdwan control connections",
+          "show sdwan control local-properties",
+          "show sdwan bfd sessions",
+          "show ip bgp neighbors",
+          {% if peer_sysip | default('') != '' %}
+          "show ip bgp neighbors {{ peer_sysip }}",
+          "show ip bgp vpnv4 all neighbors {{ peer_sysip }}",
+          "show ip route {{ peer_sysip }}",
+          {% endif %}
+          "show running-config | section bgp",
+          "show logging | i BGP",
+          "show ip vrf"
+        ]}'
+  register: bgp_diag_raw_cedge
+  when: ssh_ok | bool and (platform == 'cedge' or platform == '')
+  delegate_to: localhost
+  no_log: true
+  ignore_errors: true
+
+- name: "1057B PARSE CEDGE DIAGNOSTIC BUNDLE"
+  set_fact:
+    bgp_diag_cedge: "{{ bgp_diag_raw_cedge.stdout | from_json }}"
+  when: >
+    ssh_ok | bool and
+    (platform == 'cedge' or platform == '') and
+    bgp_diag_raw_cedge is defined and
+    bgp_diag_raw_cedge.failed == false and
+    bgp_diag_raw_cedge.stdout is defined
+
+# GAP 2 — show running-config vpn X router bgp (vEdge BGP config per VPN)
+# GAP 7 — show bgp neighbor (global — no per-peer form exists on vEdge 20.x)
+# GAP 8 — show ip routes vpn X (all routes — host-specific IP/32 lookup not supported on vEdge)
+# GAP 9 — show log | i BGP (syslog content) + show logging | i BGP (logging config, fallback)
+# v14    — All vEdge commands verified on live vEdge 20.3.1 and 20.3.8
+# v16    — Dual log commands; stale comments corrected
+- name: "1058 RUN FULL DIAGNOSTIC BUNDLE — VEDGE"
+  block:
+    - name: "1058 RUN FULL DIAGNOSTIC BUNDLE — VEDGE"
+      ansible.builtin.script:
+        executable: /usr/bin/python3
+        cmd: >
+          roles/BGP-Router-Up-Down-Viptela/tasks/bgp_ssh.py
+          '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}",
+            "password": "{{ ansible_password }}", "device_type": "cisco_ios",
+            "commands": [
+              "paginate false",
+              "show version",
+              "show software",
+              "show system status",
+              "show system on-demand",
+              "show interface",
+              "show interface description",
+              "show vrrp",
+              "show arp",
+              "show omp peers",
+              "show control local-properties",
+              "show control connections",
+              "show bfd sessions",
+              "show bgp summary",
+              "show running-config vpn {{ vpn_id | default('0') }} router bgp",
+              "show bgp neighbor",
+              {% if vpn_id | default('0') not in ['0', '', 'global'] %}
+              "show ip routes vpn {{ vpn_id }}",
+              {% else %}
+              "show ip routes",
+              {% endif %}
+              "show logging | i BGP"
+            ]}'
+      register: bgp_diag_raw_vedge
+      delegate_to: localhost
+      no_log: true
+
+  rescue:
+    - name: "1058 DIAGNOSTIC BUNDLE FAILED — WRITE WARNING TO OUTPUT"
+      lineinfile:
+        path: "{{ output_file }}"
+        line: |
+          WARNING [DIAGNOSTIC BUNDLE]: SSH command bundle failed for {{ MgmtIP }}.
+            Reason  : SSH session error or device returned no data.
+            Impact  : BGP state, template-managed status, interface data, BGP config,
+                      routing table, and process health cannot be assessed automatically.
+            Action  : NOC to SSH manually to device and run diagnostic commands.
+      delegate_to: localhost
+    - debug:
+        msg: >
+          DIAGNOSTIC BUNDLE FAILED for {{ MgmtIP }} —
+          BGP analysis, template check, and interface check are all blocked.
+          NOC must SSH manually to assess BGP state.
+    - ansible.builtin.meta: clear_host_errors
+  when: ssh_ok | bool and platform == 'vedge'
+
+- name: "1058B PARSE VEDGE DIAGNOSTIC BUNDLE"
+  set_fact:
+    bgp_diag_vedge: "{{ bgp_diag_raw_vedge.stdout | from_json }}"
+  when: >
+    ssh_ok | bool and
+    platform == 'vedge' and
+    bgp_diag_raw_vedge is defined and
+    bgp_diag_raw_vedge.failed == false and
+    bgp_diag_raw_vedge.stdout is defined
+
+- debug:
+    msg: >
+      DIAGNOSTIC BUNDLE: {{ 'OK — data collected for ' + MgmtIP
+      if (bgp_diag_vedge is defined and platform == 'vedge')
+      else 'NOT available — BGP/template/interface analysis will be limited' }}
+  when: ssh_ok | bool and platform == 'vedge'
+
+- name: "1059 WRITE SSH AND PLATFORM RESULT TO OUTPUT"
+  lineinfile:
+    path: "{{ output_file }}"
+    insertafter: 'Observations:'
+    line: |
+      SSH and Platform:
+        - SSH to {{ MgmtIP }} : {{ 'Successful' if ssh_ok | bool else 'FAILED (' + (ssh_failure_reason | default('unknown') | upper) + ') — Engage NOC' }}
+        - Platform           : {{ platform | upper | default('UNKNOWN') }}
+        - Type               : {{ 'cEdge (IOS-XE SD-WAN)' if platform == 'cedge' else 'vEdge (Viptela OS)' if platform == 'vedge' else 'Unknown — defaulted from inventory' }}
+  delegate_to: localhost

@@ -1,0 +1,216 @@
+---
+- name: "1179 WRITE SAFETY HEADER BEFORE FULL REPORT"
+  lineinfile:
+    path: "{{ output_file }}"
+    create: yes
+    line: "parsedevices=true — BGP-Router-Up-Down-Viptela execution in progress"
+  delegate_to: localhost
+  ignore_errors: true
+
+- name: "1180 WRITE COMPLETE FORMATTED REPORT TO OUTPUT.DAT"
+  copy:
+    dest: "{{ output_file }}"
+    content: |
+      parsedevices=true
+      {{ domain | default(DNSEntityName) }}#{{ DNSEntityName }}#Success# SELECTED PLAYBOOK: BGP-Router-Up-Down-Viptela
+
+      ================================================================
+                        AUTOMATION TRIAGE REPORT
+      ================================================================
+      Playbook         : BGP-Router-Up-Down-Viptela
+      Hostname         : {{ entityHostName | default(DNSEntityName) }}
+      IP Address       : {{ MgmtIP }}
+      NEID             : {{ DNSEntityName }}
+      Platform         : {{ platform | upper | default('UNKNOWN') }}
+      Alarm Start Time : {{ incidentStartTime | default('N/A') }}
+      Run Date/Time    : {{ runDateTime | default('N/A') }} UTC
+      ----------------------------------------------------------------
+      Incident Type    : {{ incidentType | default('N/A') }}
+      Peer System-IP   : {{ peer_sysip | default('N/A') }}
+      VPN ID           : {{ vpn_id | default('0') }}
+      Assure1 Alarm ID : {{ assureAlarmID | default('N/A') }}
+      Alarm Text       : {{ alarm_text | default('N/A') }}
+      ================================================================
+
+      [1] CONNECTIVITY CHECK
+      ----------------------------------------------------------------
+      Ping to {{ MgmtIP }}   : {{ '0% packet loss — OK' if (packetLoss | default('100') | int) == 0 else (packetLoss | default('N/A') | string) + '% packet loss — FAILED' }}
+      SSH to {{ MgmtIP }}    : {{ 'Successful' if ssh_ok | default(false) | bool else 'FAILED' }}
+
+      [2] PLATFORM DETECTION
+      ----------------------------------------------------------------
+      Platform         : {{ platform | upper | default('UNKNOWN') }}
+      Type             : {{ 'cEdge (IOS-XE SD-WAN)' if platform | default('') == 'cedge' else 'vEdge (Viptela OS)' if platform | default('') == 'vedge' else 'Unknown — defaulted from inventory' }}
+      Device Status    : {{ 'Template-Managed (CLI config changes not permitted)' if template_managed | default(false) | bool else 'CLI-Managed' }}
+
+      [3] VMANAGE DISCOVERY AND AUTHENTICATION
+      ----------------------------------------------------------------
+      Customer         : {{ shortname | default('N/A') }}
+      vManage IP       : {{ vmanage_ip | default('Not found') }}
+      Auth Status      : {{ 'Authenticated successfully' if vmanage_authenticated | default(false) | bool else 'FAILED — device inventory credentials do not match vManage credentials. Alarm clearance skipped. Verify manually in vManage.' }}
+
+      [4] BGP STATE CHECK (VPN: {{ vpn_id | default('0') }})
+      ----------------------------------------------------------------
+      Neighbor system-IP : {{ peer_sysip | default('N/A') }}
+      Total neighbors    : {{ bgp_neighbors | default([]) | length }}
+      Established        : {{ bgp_neighbors | default([]) | selectattr('state', 'equalto', 'established') | list | length }}
+      Stuck / Down       : {{ bgp_stuck_neighbors | default([]) | length }}
+      BGP Status         : {{ 'ALL ESTABLISHED — alarm is stuck on vManage' if bgp_all_up | default(false) | bool else 'NEIGHBORS DOWN' if bgp_neighbors | default([]) | length > 0 else 'NO BGP DATA — diagnostic bundle unavailable (SSH issue or CLI restricted)' }}
+      {% for nbr in bgp_neighbors | default([]) %}
+      Neighbor {{ nbr.neighbor | default('?') }}  : {{ nbr.state | default('unknown') | upper }} (AS {{ nbr.remote_as | default('?') }})
+      {% if nbr.state | default('') | lower in ['idle', 'active', 'connect', 'opensent', 'openconfirm', 'unknown'] %}
+      Diagnosis           : {{ nbr.state | default('unknown') | get_bgp_state_diagnosis | indent(26) }}
+      {% endif %}
+      {% endfor %}
+      {% if bgp_stuck_neighbors | default([]) | length > 0 and neighbor_reachable | default(false) | bool %}
+      BGP Config Check:
+        Commands run on device:
+          cEdge: show running-config | section bgp
+          vEdge: show run vpn {{ vpn_id | default('0') }} router bgp
+        Verify on device output in DIAGNOSTIC BUNDLE section:
+          - Neighbor IP {{ peer_sysip | default('N/A') }} is correctly configured
+          - Remote-AS matches peer's local-AS
+          - Local-AS (if configured) is correct
+          - Update-source is set (if peering via loopback)
+          - eBGP multihop is configured if peer is more than 1 hop away
+      {% endif %}
+
+      [5] NEIGHBOR REACHABILITY
+      ----------------------------------------------------------------
+      Neighbor system-IP : {{ peer_sysip | default('N/A') }}
+      Agent ping         : {{ 'OK' if agent_ping_ok | default(false) | bool else 'FAILED' }}
+      Device ping (VPN)  : {{ 'OK — reachable from device VPN' if device_ping_ok | default(false) | bool else 'FAILED' if ssh_ok | default(false) | bool else 'NOT RUN (SSH unavailable)' }}
+      WAN interface      : {{ wan_interface_vedge | default(wan_interface_cedge | default('N/A')) if ssh_ok | default(false) | bool else 'N/A' }}
+      Final result       : {{ 'REACHABLE' if neighbor_reachable | default(false) | bool else 'NOT REACHABLE' }}
+
+      {% if not (neighbor_reachable | default(false) | bool) and (neighbor_evidence_vedge is defined and neighbor_evidence_vedge.output | default({}) | length > 0 or neighbor_evidence_cedge is defined and neighbor_evidence_cedge.output | default({}) | length > 0) %}
+      [5B] NEIGHBOR UNREACHABLE — EVIDENCE BUNDLE
+      ----------------------------------------------------------------
+      {% set evidence = neighbor_evidence_vedge.output | default({}) if platform == 'vedge' else neighbor_evidence_cedge.output | default({}) %}
+      {% for cmd, out in evidence.items() %}
+      --- {{ cmd }} ---
+      {{ out if out | default('') | length > 0 else '(no output)' }}
+      {% endfor %}
+      {% endif %}
+
+      {% if remediation_attempted | default(false) | bool %}
+      [6] BGP SESSION REMEDIATION
+      ----------------------------------------------------------------
+      Action     : BGP session clear issued (single neighbor, VRF-scoped)
+      VPN        : {{ vpn_id | default('0') }}
+      Neighbors  : {{ bgp_stuck_neighbors | default([]) | map(attribute='neighbor') | list | join(', ') }}
+      Platform   : {{ platform | upper }}
+      Post-clear : {{ 'ESTABLISHED — resolved after clear' if bgp_recovered | default(false) | bool else 'Still down — interface check performed' }}
+      {% endif %}
+
+      {% if interface_bounce_safe | default(false) | bool or template_managed | default(false) | bool %}
+      [7] INTERFACE CHECK AND REMEDIATION
+      ----------------------------------------------------------------
+      Interface      : {{ bounce_interface | default('Not identified') }}
+      Device Status  : {{ 'Template-Managed — no CLI action taken' if template_managed | default(false) | bool else 'CLI-Managed' }}
+      {% if template_managed | default(false) | bool %}
+      Result         : Skipped — device is template-managed
+      {% elif interface_bounce_safe | default(false) | bool %}
+      Result         : shut/no-shutdown executed on {{ bounce_interface | default('') }}
+      Post-bounce    : {{ 'ESTABLISHED — resolved after bounce' if bgp_recovered | default(false) | bool else 'Still down — escalating' }}
+      {% endif %}
+      {% endif %}
+
+      [8] VMANAGE ALARM CLEARANCE
+      ----------------------------------------------------------------
+      vManage IP     : {{ vmanage_ip | default('Not found') }}
+      Auth Status    : {{ 'Authenticated successfully' if vmanage_authenticated | default(false) | bool else 'FAILED — device inventory credentials do not match vManage credentials. Alarm clearance skipped. Verify manually in vManage.' }}
+      Active alarms  : {{ alarm_uuids | default([]) | length }} alarm(s) found for {{ DNSEntityName }}
+      Clear status   : {% if not (vmanage_authenticated | default(false) | bool) %}Skipped — vManage authentication failed. Verify and clear alarm manually in vManage UI.{% elif alarm_uuids | default([]) | length == 0 %}No active alarms found on vManage for this device (alarm may have self-cleared or was not present).{% elif alarm_cleared | default(false) | bool %}Cleared successfully — {{ alarm_uuids | default([]) | length }} alarm(s) cleared on vManage.{% else %}Clear may have failed — verify manually in vManage UI.{% endif %}
+
+      Note           : Manual Action Required: Check and clear Azure Monitor alert if present.
+      Note           : Assure1 clearance handled by internal tooling (ID: {{ assureAlarmID | default('N/A') }})
+
+      {% if escalate_tier2 | default(false) | bool and not (closure_ready | default(false) | bool) %}
+      [9] ESCALATION — MANUAL INVESTIGATION REQUIRED
+      ----------------------------------------------------------------
+      {% if template_managed | default(false) | bool %}
+      Device Status    : Template-Managed (confirmed — vManaged field verified from device)
+      BGP Status       : {{ 'Unknown — diagnostic bundle did not return BGP data' if bgp_neighbors | default([]) | length == 0 else 'Neighbors DOWN (' + (bgp_stuck_neighbors | default([]) | length | string) + ' stuck: ' + (bgp_stuck_neighbors | default([]) | map(attribute='neighbor') | join(', ')) + ')' }}
+      Automation Action: READ-ONLY — no CLI configuration changes made.
+                         Detaching/re-attaching a vManage template causes a full
+                         config rollback and risks a service outage.
+      NOC Action (step by step):
+        1. Log into vManage → Monitor → Network → locate {{ DNSEntityName }}
+        2. Check BGP alarm status: is the alarm still active or cleared?
+        3. If BGP peer {{ peer_sysip | default('N/A') }} is DOWN on the device:
+             a. SSH to device and run: show bgp summary
+             b. SSH to peer device {{ peer_sysip | default('N/A') }} and check its BGP state
+             c. If the issue is in the template config:
+                vManage → Configuration → Templates → edit template
+                → correct BGP peer config → push to device
+        4. If BGP shows ESTABLISHED but alarm is still open:
+             Clear alarm in vManage: Monitor → Alarms → Clear alarm
+        5. Update ETMS ticket with findings and customer notification
+      Customer Impact: Verify with customer if BGP-dependent services are affected
+      {% elif not (ping_reachable | default(false) | bool) %}
+      Reason           : Device unreachable — ping to {{ MgmtIP }} failed
+      Automation Action: None taken — device not reachable
+      NOC Action       : Manual investigation and customer notify required
+      {% elif not (ssh_ok | default(false) | bool) %}
+      Reason           : SSH to {{ MgmtIP }} failed ({{ ssh_failure_reason | default('unknown') | upper }})
+      Failure Detail   : {{ 'TCP port 22 not responding — check routing and management interface' if ssh_failure_reason | default('') == 'port_closed' else 'No route to host — check routing table for ' + MgmtIP if ssh_failure_reason | default('') == 'no_route' else 'Authentication failed — check TACACS/local credentials' if ssh_failure_reason | default('') == 'auth_failed' else 'SSH timed out — device may be overloaded or SSH service hung' if ssh_failure_reason | default('') == 'timeout' else 'Unknown SSH failure — check -vvv logs' }}
+      Automation Action: None taken — SSH not available
+      NOC Action       : See SSH Failure Analysis section above for specific guidance
+      {% elif not (neighbor_reachable | default(false) | bool) %}
+      Reason           : BGP neighbor {{ peer_sysip | default('N/A') }} not reachable (packet loss or no route)
+      Automation Action: Evidence collected — see section [5B] above for route, ARP,
+                         BGP neighbor detail, hold timer, CPU and memory data.
+      NOC Action Steps :
+        1. Review [5B] NEIGHBOR UNREACHABLE — EVIDENCE BUNDLE above
+        2. Check route to {{ peer_sysip | default('N/A') }} — is next-hop correct?
+        3. Check ARP — is peer MAC resolved?
+        4. Check BGP neighbor detail — what is hold timer? last reset reason?
+        5. Check CPU/memory — is device overloaded causing keepalive drops?
+        6. Check BGP logs — any NOTIFICATION messages?
+        7. Engage Tier-2 with evidence bundle as attachment
+      {% else %}
+      Reason           : BGP session could not be auto-resolved after all remediation attempts
+      Automation Action: BGP clear {{ 'attempted' if remediation_attempted | default(false) | bool else 'not attempted (no stuck sessions identified)' }}
+      NOC Action       : Manual investigation and customer notify required
+      {% endif %}
+      {% endif %}
+
+      {% if closure_ready | default(false) | bool %}
+      [9] RESOLUTION
+      ----------------------------------------------------------------
+      BGP session(s) on {{ DNSEntityName }} (VPN: {{ vpn_id | default('0') }}) are ESTABLISHED.
+      vManage alarm(s) cleared where applicable.
+      Ticket assigned for monitoring and auto-close.
+      {% endif %}
+
+      ================================================================
+      DIAGNOSTIC BUNDLE
+      ================================================================
+      Platform : {{ platform | upper }}
+      {% if platform == 'cedge' or platform == '' %}
+      {% for cmd, out in (bgp_diag_cedge.output | default({})).items() %}
+      --- {{ cmd }} ---
+      {{ out }}
+      {% endfor %}
+      {% endif %}
+      {% if platform == 'vedge' %}
+      {% for cmd, out in (bgp_diag_vedge.output | default({})).items() %}
+      --- {{ cmd }} ---
+      {{ out }}
+      {% endfor %}
+      {% endif %}
+
+      ================================================================
+      Next Plan of Action:
+        - If the alarm clears, AVA will be triggered below.
+        - If the alarm does not clear, NOC to manually check and notify the customer.
+      ================================================================
+  delegate_to: localhost
+
+- name: "1181 WRITE AVA CLOSURE TAG"
+  lineinfile:
+    path: "{{ output_file }}"
+    insertafter: EOF
+    line: "Post‑Test Validation: Verified Services UP"
+  delegate_to: localhost

@@ -1,0 +1,601 @@
+---
+# Cisco-Router-Device-Down — BGP Remediation
+# Only executes when has_bgp=True AND stuck_neighbors list is non-empty.
+#
+
+- block:
+
+    - name: 1600 VERIFY STUCK NEIGHBORS IN VRF (CROSS-CHECK)
+      # Primary SSH via secondary jump on the remediation path.
+      ansible.builtin.script: >
+        tasks/jump_ssh.py
+        'secondary_hostname={{ secondary_hostname | default(partner_neid) | default('') }}'
+        'platform={{ detected_platform | default("ios") }}'
+        'jump_password_override={{ jump_password_override | default('') }}'
+        'jump_user_override={{ jump_user_override | default('') }}'
+        '{{ partner_ip }}'
+        '{{ ansible_user }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ primary_lan_ip }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ (stuck_neighbors
+             | map(attribute="vrf")
+             | unique
+             | map("build_bgp_vrf_summary_command", detected_platform)
+             | list
+             + (["show ip bgp summary"]
+                if detected_platform != "ios_xr"
+                   and (stuck_neighbors | selectattr("vrf", "equalto", "") | list | length > 0)
+                else ["show bgp summary"]
+                if detected_platform == "ios_xr"
+                   and (stuck_neighbors | selectattr("vrf", "equalto", "") | list | length > 0)
+                else [])
+            ) | to_json }}'
+      args:
+        executable: python3
+      register: bgp_vrf_check_raw
+      no_log: true
+      delegate_to: localhost
+
+    - name: 1601 PARSE VRF CROSS-CHECK OUTPUT
+      ansible.builtin.set_fact:
+        bgp_vrf_check_parsed: "{{ bgp_vrf_check_raw.stdout | safe_json_parse }}"
+
+    # Pre-clear BGP snapshot
+    # MOP: Verify BGP Underlay Reachability BEFORE clearing
+    # MOP says: ping <BGP-neighbor-IP> source <update-source-intf or WAN>
+    #           traceroute <BGP-neighbor-IP>
+    #           show ip arp | include <BGP-neighbor-IP>
+    # If ping fails → root cause is L3, not BGP. Clear still runs (NOC informed).
+    - name: 1603 BGP UNDERLAY REACHABILITY CHECK (PRE-CLEAR)
+      ansible.builtin.script: >
+        tasks/jump_ssh.py
+        'secondary_hostname={{ secondary_hostname | default(partner_neid) | default('') }}'
+        'platform={{ detected_platform | default("ios") }}'
+        'jump_password_override={{ jump_password_override | default('') }}'
+        'jump_user_override={{ jump_user_override | default('') }}'
+        '{{ partner_ip }}'
+        '{{ ansible_user }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ primary_lan_ip }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ (stuck_neighbors
+             | rejectattr("admin_down", "equalto", true)
+             | list
+             | map("build_bgp_underlay_commands", wan_interface, detected_platform)
+             | flatten
+             | unique
+             | list
+            ) | to_json }}'
+      args:
+        executable: python3
+      register: bgp_underlay_raw
+      no_log: true
+      delegate_to: localhost
+      when: stuck_neighbors | rejectattr("admin_down", "equalto", true) | list | length > 0
+
+    # Evaluate per-neighbor L3 reachability from the underlay ping outputs.
+    # Robust matching (handles 'source <intf>' and VRF variants) is done in
+    # the filter, so the log/gate below never reconstruct command keys.
+    - name: 1604 EVALUATE BGP UNDERLAY REACHABILITY
+      ansible.builtin.set_fact:
+        underlay_eval: >-
+          {{ (stuck_neighbors | rejectattr("admin_down", "equalto", true) | list)
+             | evaluate_underlay_reachability((bgp_underlay_raw.stdout | safe_json_parse).outputs) }}
+      when:
+        - stuck_neighbors | rejectattr("admin_down", "equalto", true) | list | length > 0
+        - bgp_underlay_raw is defined
+
+    # MOP node 154: split neighbors by whether the neighbor IP is pingable.
+    #   reachable=True  → BGP clear is a valid action (MOP "Yes" branch)
+    #   reachable=False → root cause is L3 NOT BGP (MOP "No" branch) → do NOT clear
+    - name: 1605 SPLIT CLEARABLE vs L3-BLOCKED NEIGHBORS
+      ansible.builtin.set_fact:
+        bgp_clear_candidates: "{{ underlay_eval | default([]) | selectattr('reachable', 'equalto', true) | list }}"
+        bgp_l3_blocked:       "{{ underlay_eval | default([]) | rejectattr('reachable', 'equalto', true) | list }}"
+
+    - name: 1606 LOG BGP UNDERLAY REACHABILITY
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+          ════════════════════════════════════════════════════════════
+          BGP UNDERLAY REACHABILITY CHECK (PRE-CLEAR) — Task 1606
+          Detected platform: {{ detected_platform | default('ios') | upper }}
+          Timestamp: {{ ansible_date_time.iso8601 | default('N/A') }}
+          ════════════════════════════════════════════════════════════
+          {% for nb in underlay_eval | default([]) %}
+          ── Neighbor: {{ nb.neighbor }}  VRF={{ nb.vrf if nb.vrf else "global" }}  AS={{ nb.as_number | default('?') }} ──
+          BGP STATE   : {{ nb.state | default('unknown') | upper }}
+          WHAT IT MEANS: {{ nb.state_hint | default('') }}
+          PING:
+          {{ nb.ping_text }}
+          TRACEROUTE:
+          {{ nb.tracert_text }}
+          ARP:
+          {{ nb.arp_text }}
+          ROUTE TO NEIGHBOR (must be a specific route, NOT default — a default
+          route does not establish BGP even when the neighbor pings):
+          {{ (bgp_underlay_raw.stdout | safe_json_parse).outputs.get("show ip route " + nb.neighbor, (bgp_underlay_raw.stdout | safe_json_parse).outputs.get("show ip route vrf " + nb.vrf + " " + nb.neighbor, "(not captured)")) if nb.vrf else (bgp_underlay_raw.stdout | safe_json_parse).outputs.get("show ip route " + nb.neighbor, "(not captured)") }}
+          {% if nb.reachable %}
+          ✓  [UNDERLAY OK] BGP neighbor {{ nb.neighbor }} is L3-reachable.
+              BGP clear is a valid action — proceeding to clear.
+          {% else %}
+          ⚠️  [UNDERLAY FAIL] Cannot ping BGP neighbor {{ nb.neighbor }}.
+              Per MOP, root cause is L3 (routing / ACL / interface), NOT BGP.
+              BGP clear SKIPPED for this neighbor. Fix Layer 3 first → NOC team.
+          {% endif %}
+          {% endfor %}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when: underlay_eval is defined
+
+    # MOP node 154 "No" branch: L3-blocked neighbors are NOT cleared; escalate.
+    - name: 1607 ESCALATE L3-BLOCKED NEIGHBORS (NO CLEAR)
+      ansible.builtin.set_fact:
+        escalation_needed: true
+      when: bgp_l3_blocked | default([]) | length > 0
+
+    - name: 1610 PRE-CLEAR BGP SNAPSHOT
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          BGP PRE-CLEAR SNAPSHOT
+          ============================================================
+          Timestamp: {{ ansible_date_time.iso8601 | default('N/A') }}
+          Stuck neighbors:
+          {% for nb in stuck_neighbors %}
+          {% if nb.admin_down | default(false) %}
+            [SKIP - ADMIN SHUTDOWN] {{ nb.neighbor }} VRF={{ nb.vrf if nb.vrf else 'global' }} AS={{ nb.as_number }} State={{ nb.state }}
+            Action: Neighbor is administratively shut — automation will NOT issue clear.
+            NOC must investigate why neighbor was admin-shutdown before re-enabling.
+          {% elif nb.neighbor in (bgp_l3_blocked | default([]) | map(attribute='neighbor') | list) %}
+            [SKIP - L3 UNREACHABLE] {{ nb.neighbor }} VRF={{ nb.vrf if nb.vrf else 'global' }} AS={{ nb.as_number }} State={{ nb.state }}
+            Action: Underlay ping to neighbor failed — root cause is L3, not BGP.
+            Clear NOT issued. Fix Layer 3 first, then escalate to NOC team.
+          {% else %}
+            [WILL CLEAR] {{ nb.neighbor }} VRF={{ nb.vrf if nb.vrf else 'global' }} AS={{ nb.as_number }} State={{ nb.state }}
+          {% endif %}
+          {% endfor %}
+
+          VRF verification outputs:
+          {% for cmd, output in bgp_vrf_check_parsed.outputs.items() %}
+          --- {{ cmd }} ---
+          {{ output }}
+          {% endfor %}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    # BGP clear — one neighbor at a time, VRF-scoped
+    # SAFETY: admin_down neighbors excluded — never clear an admin-shutdown session
+    # GATE (MOP node 154): only neighbors that are L3-reachable (underlay ping OK)
+    #   are cleared. L3-blocked neighbors are skipped and escalated (task 1607).
+    # PLATFORM: build_bgp_clear_command(vrf, platform) selects correct command syntax:
+    #   ios/ios_xe → clear ip bgp <ip> [vrf <vrf>]
+    - name: 1620 CLEAR STUCK BGP NEIGHBORS (SEQUENTIAL via jump)
+      # clear ip bgp is an exec command, passed via the jump commands list.
+      ansible.builtin.script: >
+        tasks/jump_ssh.py
+        'secondary_hostname={{ secondary_hostname | default(partner_neid) | default('') }}'
+        'platform={{ detected_platform | default("ios") }}'
+        'jump_password_override={{ jump_password_override | default('') }}'
+        'jump_user_override={{ jump_user_override | default('') }}'
+        '{{ partner_ip }}'
+        '{{ ansible_user }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ primary_lan_ip }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ [nb_item.neighbor | build_bgp_clear_command(nb_item.vrf, detected_platform)] | to_json }}'
+      args:
+        executable: python3
+      register: bgp_clear_results
+      no_log: true
+      delegate_to: localhost
+      loop: "{{ bgp_clear_candidates | default([]) if not read_only_mode else [] }}"
+      loop_control:
+        loop_var: nb_item
+        label: "{{ nb_item.neighbor }} vrf={{ nb_item.vrf if nb_item.vrf else 'global' }}"
+      when: not read_only_mode
+
+    - name: 1621 MARK BGP CLEAR ATTEMPTED
+      ansible.builtin.set_fact:
+        bgp_clear_attempted: true
+      when:
+        - bgp_clear_candidates | default([]) | length > 0
+        - not read_only_mode
+
+    - name: 1621B BGP CLEAR SUPPRESSED BY READ-ONLY MODE
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          BGP CLEAR SUPPRESSED — read_only_mode is TRUE
+          ============================================================
+          {{ bgp_clear_candidates | default([]) | length }} L3-reachable stuck neighbor(s)
+          were eligible for 'clear ip bgp', but read_only_mode suppressed the action.
+          No BGP session was cleared. Escalating to NOC team to clear manually.
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when:
+        - bgp_clear_candidates | default([]) | length > 0
+        - read_only_mode
+
+    - name: 1621C SET ESCALATION WHEN CLEAR SUPPRESSED
+      ansible.builtin.set_fact:
+        escalation_needed: true
+      when:
+        - bgp_clear_candidates | default([]) | length > 0
+        - read_only_mode
+
+    - name: 1621A NOTE WHEN NO CLEAR PERFORMED (ALL L3-BLOCKED)
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          BGP CLEAR SKIPPED — NO L3-REACHABLE NEIGHBORS
+          ============================================================
+          Every stuck neighbor failed the underlay ping test. Per MOP,
+          when the BGP neighbor IP is not pingable the root cause is L3
+          (routing / ACL / interface), not BGP. No clear was issued.
+          Escalating to NOC team for Layer-3 investigation.
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when:
+        - bgp_clear_candidates | default([]) | length == 0
+        - bgp_l3_blocked | default([]) | length > 0
+
+    - name: 1622 LOG BGP CLEAR RESULTS
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          BGP CLEAR ACTIONS
+          ============================================================
+          {% for result in bgp_clear_results.results %}
+          Neighbor {{ result.nb_item.neighbor }} (VRF={{ result.nb_item.vrf if result.nb_item.vrf else 'global' }}):
+            Command: {{ result.nb_item.neighbor | build_bgp_clear_command(result.nb_item.vrf, detected_platform) }}
+            SSH success: {{ (result.stdout | safe_json_parse).success | default(false) }}
+            Error: {{ (result.stdout | safe_json_parse).error | default('none') }}
+          {% endfor %}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when:
+        - bgp_clear_candidates | default([]) | length > 0
+        - not read_only_mode
+        - bgp_clear_results.results is defined
+
+    # Wait for BGP to reconverge
+    - name: 1625 WAIT FOR BGP RECONVERGENCE
+      # BGP needs time to re-establish: TCP setup + OPEN/KEEPALIVE exchange +
+      # route exchange. 15s produced false "still stuck" negatives. 90s covers
+      # typical reconvergence without an excessive hold on the playbook.
+      # Only wait if a clear was actually issued (skip when all neighbors L3-blocked).
+      ansible.builtin.pause:
+        seconds: 90
+      when:
+        - bgp_clear_candidates | default([]) | length > 0
+        - not read_only_mode
+
+    # Post-clear BGP snapshot
+    - name: 1630 POST-CLEAR BGP SNAPSHOT (via jump)
+      ansible.builtin.script: >
+        tasks/jump_ssh.py
+        'secondary_hostname={{ secondary_hostname | default(partner_neid) | default('') }}'
+        'platform={{ detected_platform | default("ios") }}'
+        'jump_password_override={{ jump_password_override | default('') }}'
+        'jump_user_override={{ jump_user_override | default('') }}'
+        '{{ partner_ip }}'
+        '{{ ansible_user }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ primary_lan_ip }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ (detected_platform | get_bgp_discovery_commands) | to_json }}'
+      args:
+        executable: python3
+      register: post_bgp_snap_raw
+      no_log: true
+      delegate_to: localhost
+
+    - name: 1631 LOG POST-CLEAR BGP SNAPSHOT
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          BGP POST-CLEAR SNAPSHOT
+          ============================================================
+          Timestamp: {{ ansible_date_time.iso8601 | default('N/A') }}
+
+          {{ (post_bgp_snap_raw.stdout | safe_json_parse).outputs | merge_bgp_summary_outputs(detected_platform) or '(no output)' }}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    - name: 1632 PARSE POST-CLEAR BGP STATE
+      ansible.builtin.set_fact:
+        post_bgp_summary_text: >-
+          {{ (post_bgp_snap_raw.stdout | safe_json_parse).outputs | merge_bgp_summary_outputs(detected_platform) }}
+        post_bgp_stuck: >-
+          {{ ((post_bgp_snap_raw.stdout | safe_json_parse).outputs | merge_bgp_summary_outputs(detected_platform))
+             | find_stuck_bgp_neighbors(bgp_vrf_map) }}
+
+    # Re-ping primary after BGP recovery
+    # MOP: BGP Config Verify after failed clear
+    # If BGP is still stuck after the clear+wait cycle, run config checks
+    # per the MOP: show run | section BGP, verify neighbor IP / remote-AS / local-AS
+    # Fetch BGP config first, then use actual update-source interface
+    # (not wan_interface which may differ from BGP update-source: Loopback, VRF intf etc.)
+    - name: 1645 BGP CONFIG FETCH (POST-CLEAR FAILURE via jump)
+      ansible.builtin.script: >
+        tasks/jump_ssh.py
+        'secondary_hostname={{ secondary_hostname | default(partner_neid) | default('') }}'
+        'platform={{ detected_platform | default("ios") }}'
+        'jump_password_override={{ jump_password_override | default('') }}'
+        'jump_user_override={{ jump_user_override | default('') }}'
+        '{{ partner_ip }}'
+        '{{ ansible_user }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ primary_lan_ip }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ ["show running-config | section router bgp"] | to_json }}'
+      args:
+        executable: python3
+      register: bgp_cfg_verify_raw
+      no_log: true
+      delegate_to: localhost
+      when:
+        - post_bgp_stuck is defined
+        - post_bgp_stuck | length > 0
+
+    - name: 1646 PARSE BGP CONFIG VERIFICATION
+      ansible.builtin.set_fact:
+        bgp_cfg_verify_parsed: "{{ bgp_cfg_verify_raw.stdout | safe_json_parse }}"
+        bgp_cfg_verify_text:   "{{ (bgp_cfg_verify_raw.stdout | safe_json_parse).outputs.get('show running-config | section router bgp', '') }}"
+        bgp_config_findings:   >-
+          {{ (bgp_cfg_verify_raw.stdout | safe_json_parse).outputs.get('show running-config | section router bgp', '')
+             | verify_bgp_neighbor_config(post_bgp_stuck) }}
+      when:
+        - post_bgp_stuck is defined
+        - post_bgp_stuck | length > 0
+        - bgp_cfg_verify_raw is defined
+
+    # task 1645B: Now that bgp_config_findings has update_source per neighbor,
+    # run show run/show interface on the ACTUAL update-source interfaces (not wan_interface)
+    - name: 1645B BGP UPDATE-SOURCE INTERFACE VERIFY (via jump)
+      ansible.builtin.script: >
+        tasks/jump_ssh.py
+        'secondary_hostname={{ secondary_hostname | default(partner_neid) | default('') }}'
+        'platform={{ detected_platform | default("ios") }}'
+        'jump_password_override={{ jump_password_override | default('') }}'
+        'jump_user_override={{ jump_user_override | default('') }}'
+        '{{ partner_ip }}'
+        '{{ ansible_user }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ primary_lan_ip }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ (bgp_config_findings | default([])
+             | map(attribute="update_source")
+             | select("ne", "")
+             | unique
+             | list
+             | map("regex_replace", "^(.+)$", "show running-config interface \1")
+             | list
+             + bgp_config_findings | default([])
+             | map(attribute="update_source")
+             | select("ne", "")
+             | unique
+             | list
+             | map("regex_replace", "^(.+)$", "show interface \1")
+             | list
+             + (["show running-config interface " + wan_interface,
+                 "show interface " + wan_interface]
+                if wan_interface | default("") | length > 0 else [])
+            ) | unique | to_json }}'
+      args:
+        executable: python3
+      register: bgp_intf_verify_raw
+      no_log: true
+      delegate_to: localhost
+      when:
+        - bgp_config_findings is defined
+        - bgp_config_findings | length > 0
+
+    - name: 1645C SET BGP INTF VERIFY TEXT
+      ansible.builtin.set_fact:
+        bgp_intf_verify_parsed: "{{ bgp_intf_verify_raw.stdout | safe_json_parse }}"
+      when:
+        - bgp_intf_verify_raw is defined
+        - bgp_config_findings is defined
+
+    - name: 1647 LOG BGP CONFIG FINDINGS
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+          ════════════════════════════════════════════════════════════
+          BGP CONFIG VERIFICATION (POST-CLEAR FAILURE) — Task 1647
+          MOP: verify neighbor IP, Remote-AS, Local-AS after failed clear
+          ════════════════════════════════════════════════════════════
+          BGP running-config section:
+          {{ bgp_cfg_verify_text | default("(not available)") }}
+
+          {% if wan_interface | length > 0 %}
+          WAN interface status:
+          {{ (bgp_cfg_verify_parsed.outputs | default({})).get("show interface " + wan_interface, "(not available)") }}
+          {% endif %}
+
+          ── Per-neighbor config findings ──
+          {% for finding in bgp_config_findings | default([]) %}
+          Neighbor {{ finding.neighbor }} (VRF={{ finding.vrf if finding.vrf else "global" }}):
+            In config    : {{ "YES" if finding.in_config else "NO — NEIGHBOR MISSING FROM CONFIG" }}
+            Remote-AS    : {{ finding.remote_as if finding.remote_as else "NOT FOUND — check remote-as statement" }}
+            Update-source: {{ finding.update_source if finding.update_source else "none (uses physical exit interface)" }}
+            Admin shutdown: {{ "YES — remove neighbor shutdown" if finding.shutdown_in_config else "No" }}
+            Verdict      : {{ finding.verdict }}
+            {% if finding.verdict == "NEIGHBOR_NOT_IN_CONFIG" %}
+            ⚠️  ACTION: Neighbor not in config. Verify neighbor IP is correct.
+            {% elif finding.verdict == "ADMIN_SHUTDOWN_IN_CONFIG" %}
+            ⚠️  ACTION: Neighbor has shutdown statement. Remove: no neighbor {{ finding.neighbor }} shutdown
+            {% elif finding.verdict == "MISSING_REMOTE_AS" %}
+            ⚠️  ACTION: remote-as missing. Add: neighbor {{ finding.neighbor }} remote-as <ASN>
+            {% else %}
+            ✓  Config looks correct. Issue may be peer-side. Escalate to NOC team.
+            {% endif %}
+            Update-source interface details:
+            {% set usrc = finding.update_source %}
+            {% if usrc and bgp_intf_verify_parsed is defined %}
+            {{ bgp_intf_verify_parsed.outputs.get("show interface " + usrc, "(not available)") | truncate(400) }}
+            {% else %}
+            (No update-source configured — using physical exit interface {{ wan_interface }})
+            {% if bgp_intf_verify_parsed is defined %}
+            {{ bgp_intf_verify_parsed.outputs.get("show interface " + wan_interface, "(not available)") | truncate(400) }}
+            {% endif %}
+            {% endif %}
+          {% endfor %}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when:
+        - post_bgp_stuck is defined
+        - post_bgp_stuck | length > 0
+        - bgp_config_findings is defined
+
+    # MOP says ping BGP NEIGHBOR IP post-clear (not MgmtIP)
+    # MOP node: "if neighbor is up/Established, ping neighbor IP to confirm
+    # reachability: ping <neighbor-ip>"
+    # This pings FROM the CE router to each cleared neighbor to confirm
+    # the BGP session routing path is working end-to-end.
+    - name: 1635 PING BGP NEIGHBOR IPS ON CE (POST-CLEAR via jump)
+      ansible.builtin.script: >
+        tasks/jump_ssh.py
+        'secondary_hostname={{ secondary_hostname | default(partner_neid) | default('') }}'
+        'platform={{ detected_platform | default("ios") }}'
+        'jump_password_override={{ jump_password_override | default('') }}'
+        'jump_user_override={{ jump_user_override | default('') }}'
+        '{{ partner_ip }}'
+        '{{ ansible_user }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ primary_lan_ip }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ (stuck_neighbors
+             | rejectattr("admin_down", "equalto", true)
+             | list
+             | map("build_bgp_neighbor_ping_cmd", detected_platform)
+             | list) | to_json }}'
+      args:
+        executable: python3
+      register: bgp_neighbor_ping_raw
+      no_log: true
+      delegate_to: localhost
+      when: stuck_neighbors | rejectattr("admin_down", "equalto", true) | list | length > 0
+
+    - name: 1636 LOG BGP NEIGHBOR PING RESULT
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+          ── BGP Neighbor Reachability (Post-Clear) — Task 1636 ──
+          {% set np = bgp_neighbor_ping_raw.stdout | safe_json_parse %}
+          {% for nb in stuck_neighbors | rejectattr("admin_down", "equalto", true) | list %}
+          {% set vrf = nb.vrf %}
+          {% set has_vrf = vrf and vrf | lower not in ('', 'default', 'global') %}
+          {% set ping_key = "ping vrf " + vrf + " " + nb.neighbor + " repeat 5 timeout 3"
+                            if has_vrf else
+                            "ping " + nb.neighbor + " repeat 5 timeout 3" %}
+          Neighbor {{ nb.neighbor }} (VRF={{ vrf if vrf else "global" }}):
+          {{ np.outputs.get(ping_key, "(not executed)") }}
+          {% if "Success rate is 0" in np.outputs.get(ping_key, "")
+                or "!!" not in np.outputs.get(ping_key, "") %}
+          ⚠️  Neighbor {{ nb.neighbor }} NOT reachable post-clear.
+              BGP session cleared but L3 path to neighbor is broken.
+          {% else %}
+          ✓  Neighbor {{ nb.neighbor }} reachable post-clear.
+          {% endif %}
+          {% endfor %}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when:
+        - stuck_neighbors | rejectattr("admin_down", "equalto", true) | list | length > 0
+        - bgp_neighbor_ping_raw is defined
+
+    - name: 1640 RE-PING PRIMARY AFTER BGP CLEAR
+      ansible.builtin.script: >
+        tasks/ping.py
+        '{{ MgmtIP }}'
+        '{{ ping_count | default(5) }}'
+      args:
+        executable: python3
+      register: post_bgp_ping_raw
+      delegate_to: localhost
+
+    - name: 1641 SET POST-BGP REACHABILITY
+      ansible.builtin.set_fact:
+        post_bgp_reachable: "{{ (post_bgp_ping_raw.stdout | safe_json_parse).packet_loss | int < 100 }}"
+
+    - name: 1642 LOG BGP REMEDIATION OUTCOME
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          BGP REMEDIATION OUTCOME
+          ============================================================
+          Pre-clear stuck neighbors  : {{ stuck_neighbors | length }}
+          Post-clear stuck neighbors : {{ post_bgp_stuck | length }}
+          Primary ping after clear   : {{ 'REACHABLE' if post_bgp_reachable else 'STILL UNREACHABLE' }}
+
+          {% if post_bgp_stuck | length > 0 %}
+          [BGP] Neighbors still non-Established after clear:
+          {% for nb in post_bgp_stuck %}
+            {{ nb.neighbor }} VRF={{ nb.vrf if nb.vrf else 'global' }} State={{ nb.state }}
+            Hint: {{ nb.hint }}
+          {% endfor %}
+          Neighbor(s) remain stuck — this is expected if the peer-side is also down.
+          {% else %}
+          [BGP] All previously stuck neighbors are now Established or cleared.
+          {% endif %}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    - name: 1643 SET ESCALATION IF BGP STILL DOWN AFTER CLEAR
+      ansible.builtin.set_fact:
+        escalation_needed: true
+      when:
+        - post_bgp_stuck | length > 0
+        - not post_bgp_reachable
+
+    - name: 1650 MARK BGP REMEDIATION PHASE OK
+      ansible.builtin.set_fact:
+        phase_results: "{{ phase_results | combine({'bgp_remediation': 'ok'}) }}"
+
+  rescue:
+    - name: 1600R BGP REMEDIATION RESCUE
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          [BGP REMEDIATION] PHASE FAILED — SSH error during BGP clear
+          ============================================================
+          BGP clear could not be completed for {{ stuck_neighbors | length }} stuck neighbor(s).
+          Neighbors targeted: {{ stuck_neighbors | map(attribute='neighbor') | join(', ') }}
+          Automation will continue with diagnostics and closure.
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    - name: 1600R SET BGP REMEDIATION FAILED
+      ansible.builtin.set_fact:
+        bgp_clear_attempted: false
+        post_bgp_reachable: false
+        phase_results: "{{ phase_results | combine({'bgp_remediation': 'failed'}) }}"
+        escalation_needed: true

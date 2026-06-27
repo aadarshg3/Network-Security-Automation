@@ -1,0 +1,112 @@
+---
+# Cisco-Router-Device-Down — Input Gathering
+
+- block:
+
+    - name: 1010 NORMALIZE DESCRIPTION
+      ansible.builtin.set_fact:
+        description_normalized: "{{ Description | default('') | normalize_description }}"
+
+    - name: 1011 EXTRACT SHORTNAME FROM DNSENTITYNAME
+      ansible.builtin.set_fact:
+        shortname: "{{ DNSEntityName | derive_shortname_from_neid }}"
+
+    - name: 1012 COMPUTE SITE GROUP FOR PARTNER DISCOVERY
+      ansible.builtin.set_fact:
+        site_group: "{{ DNSEntityName | derive_site_group(3) }}"
+
+    - name: 1012A COMPUTE LOCATION ID FOR ESP PARTNER QUERY
+      ansible.builtin.set_fact:
+        # location_id = first two hyphen-delimited NEID tokens (e.g. "deapega-r25pega").
+        # The ESP inventory-search API does a PREFIX match on dnsEntityName — querying
+        # dnsEntityName=deapega-r25pega returns exactly the routers at that site
+        # (deapega-r25pega-2989417e001 AND deapega-r25pega-3106229e001). This mirrors
+        # the production `cinfo <location_id>` behaviour. Confirmed against ESP SIT.
+        location_id: "{{ DNSEntityName.split('-')[:2] | join('-') }}"
+
+    - name: 1013 APPEND CONTEXT TO OUTPUT
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+          Cisco-Router-Device-Down Automation Run
+          Ticket: {{ TicketNumber | default('N/A') }}
+          NEID: {{ DNSEntityName }}
+          MgmtIP: {{ MgmtIP }}
+          Started: {{ ansible_date_time.iso8601 | default('N/A') }}
+          Shortname: {{ shortname }}
+          Site Group: {{ site_group }}
+          Manufacturer: {{ Manufacturer | default('N/A') | lower }}
+          Device Type: {{ deviceType | default('Router') }}
+          Model: {{ model | default('N/A') }}
+          Assignment Group: {{ assignment_group | default('N/A') }}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    - name: "1013A NOC CHANGE WINDOW NOTICE"
+      # MOP Step 2: Check change window / power / maintenance plan
+      # This cannot be automated — NOC must verify manually in ETMS/VBSM
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+          ════════════════════════════════════════════════════════════════════════
+          ⚠️  NOC MANUAL CHECK REQUIRED — CHANGE WINDOW / MAINTENANCE PLAN
+          ════════════════════════════════════════════════════════════════════════
+          Before acting on this automation output, verify the following in ETMS:
+            1. Is there an active change window for this device or site?
+            2. Is there a power maintenance or planned outage in progress?
+            3. Are there existing open outage tickets for the same site/location?
+               (ETMS cross-reference: same site NEID group)
+          If YES to any → put this INC on hold and link to the change record.
+            • If an outage / device-down ticket already exists for this site
+              (ETMS cross-reference) → assign this INC to the GT NOC team.
+          Automation has proceeded with technical checks only.
+          ════════════════════════════════════════════════════════════════════════
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    - name: 1014 VALIDATE REQUIRED INVENTORY FIELDS
+      ansible.builtin.assert:
+        that: "inv_field_item.value | default('') | length > 0"
+        fail_msg: "Required inventory field missing: {{ inv_field_item.key }}"
+        quiet: true
+      loop:
+        - {key: "MgmtIP",       value: "{{ MgmtIP | default('') }}"}
+        - {key: "DNSEntityName", value: "{{ DNSEntityName | default('') }}"}
+        - {key: "ansible_user", value: "{{ ansible_user | default('') }}"}
+        - {key: "CustomerNumber", value: "{{ CustomerNumber | default('') }}"}
+      loop_control:
+        loop_var: inv_field_item
+      when: inv_field_item.value | default('') | length == 0
+      # Assert only fires on missing fields; loop iterates all to collect all failures
+
+    - name: 1015 MARK INPUT GATHERING PHASE OK
+      ansible.builtin.set_fact:
+        phase_results: "{{ phase_results | combine({'input_gathering': 'ok'}) }}"
+
+  rescue:
+    - name: 1014R INPUT GATHERING RESCUE
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          [INPUT GATHERING] PHASE FAILED
+          ============================================================
+          Required input fields could not be validated.
+          Check Jenkins extra-vars for missing: MgmtIP, DNSEntityName,
+          ansible_user, CustomerNumber.
+          Automation cannot proceed without valid inventory.
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    - name: 1014R SET INPUT GATHERING FAILED
+      ansible.builtin.set_fact:
+        phase_results: "{{ phase_results | combine({'input_gathering': 'failed'}) }}"
+        escalation_needed: true
+
+    - name: 1014R RE-RAISE
+      ansible.builtin.fail:
+        msg: "Input gathering phase failed — missing required inventory fields."

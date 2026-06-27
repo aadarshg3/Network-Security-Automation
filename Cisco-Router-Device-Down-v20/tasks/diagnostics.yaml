@@ -1,0 +1,198 @@
+---
+# Cisco-Router-Device-Down — Diagnostic bundle (read-only, remediation path).
+
+- block:
+
+    - name: 1700 GATHER DIAGNOSTIC BUNDLE (IOS / IOS-XE via jump)
+      ansible.builtin.script: >
+        tasks/jump_ssh.py
+        'secondary_hostname={{ secondary_hostname | default(partner_neid) | default('') }}'
+        'platform={{ detected_platform | default("ios") }}'
+        'jump_password_override={{ jump_password_override | default('') }}'
+        'jump_user_override={{ jump_user_override | default('') }}'
+        '{{ partner_ip }}'
+        '{{ ansible_user }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ primary_lan_ip }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ (
+              ["show version",
+               "show logging | include reload",
+               "show ip interface brief",
+               "show ip route",
+               "show ip route summary",
+               "show interfaces description",
+               "show ip arp",
+               "show processes cpu sorted | exclude 0.0",
+               "show processes memory sorted",
+               "show ip bgp all summary",
+               "show logging | include Dying",
+               "show dying-gasp status",
+               "show environment all",
+               "show archive log config all",
+               "show running-config | include archive"] 
+              + (["show interface " + wan_interface,
+                  "show ip interface " + wan_interface]
+                 if wan_interface | length > 0 else [])
+              + (["show ip route " + static_default_next_hop]
+                 if static_default_next_hop | length > 0 else [])
+            ) | to_json }}'
+      args:
+        executable: python3
+      register: diag_raw_ios
+      no_log: true
+      delegate_to: localhost
+      when: detected_platform in ['ios', 'ios_xe']
+
+    - name: 1701 GATHER DIAGNOSTIC BUNDLE (IOS-XR via jump)
+      ansible.builtin.script: >
+        tasks/jump_ssh.py
+        'secondary_hostname={{ secondary_hostname | default(partner_neid) | default('') }}'
+        'platform={{ detected_platform | default("ios") }}'
+        'jump_password_override={{ jump_password_override | default('') }}'
+        'jump_user_override={{ jump_user_override | default('') }}'
+        '{{ partner_ip }}'
+        '{{ ansible_user }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ primary_lan_ip }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ (
+              ["show version",
+               "show logging | include reload",
+               "show ipv4 interface brief",
+               "show route ipv4",
+               "show interfaces description",
+               "show arp",
+               "show processes cpu",
+               "show processes memory",
+               "show bgp all summary",
+               "show logging | include Dying",
+               "show environment all",
+               "show configuration history log"] 
+              + (["show interface " + wan_interface]
+                 if wan_interface | length > 0 else [])
+            ) | to_json }}'
+      args:
+        executable: python3
+      register: diag_raw_xr
+      no_log: true
+      delegate_to: localhost
+      when: detected_platform == 'ios_xr'
+
+    - name: 1702 RUN DYING-GASP COMMAND ON SUPPORTING PLATFORMS
+      ansible.builtin.script: >
+        tasks/device_ssh.py
+        'platform={{ detected_platform | default('ios') }}'
+        '{{ MgmtIP }}'
+        '{{ ansible_user }}'
+        '{{ ansible_password }}'
+        '{{ ["show logging | include LINEPROTO",
+             "show logging | include UPDOWN",
+             "show logging | include changed state"] | to_json }}'
+      args:
+        executable: python3
+      register: dying_gasp_raw
+      no_log: true
+      delegate_to: localhost
+      when:
+        - primary_reachable
+        - detected_platform in ['ios', 'ios_xe']
+
+    - name: 1703 PARSE IOS/IOS-XE DIAGNOSTICS
+      ansible.builtin.set_fact:
+        diag_parsed:  "{{ diag_raw_ios.stdout | safe_json_parse }}"
+        diag_success: "{{ (diag_raw_ios.stdout | safe_json_parse).success | default(false) }}"
+      when: detected_platform in ['ios', 'ios_xe']
+
+    - name: 1704 PARSE IOS-XR DIAGNOSTICS
+      ansible.builtin.set_fact:
+        diag_parsed:  "{{ diag_raw_xr.stdout | safe_json_parse }}"
+        diag_success: "{{ (diag_raw_xr.stdout | safe_json_parse).success | default(false) }}"
+      when: detected_platform == 'ios_xr'
+
+    - name: 1705 APPEND DIAGNOSTIC BUNDLE TO OUTPUT
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          {{ diag_cmd_item }}
+          ============================================================
+          {{ diag_parsed.outputs.get(diag_cmd_item, '(no output)') }}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      loop: "{{ diag_parsed.outputs.keys() | list | reject('match', '^_') | sort | list }}"
+      loop_control:
+        loop_var: diag_cmd_item
+      when: diag_parsed is defined
+
+    - name: 1706 APPEND WAN INTERFACE DETAIL TO OUTPUT
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          WAN INTERFACE DETAILED STATE ({{ wan_interface }})
+          ============================================================
+          {{ diag_parsed.outputs.get('show interface ' + wan_interface, '(not available)') }}
+
+          ============================================================
+          show ip interface {{ wan_interface }}
+          ============================================================
+          {{ diag_parsed.outputs.get('show ip interface ' + wan_interface, '(not available)') }}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when:
+        - diag_parsed is defined
+        - wan_interface | length > 0
+
+    - name: 1707 APPEND DYING-GASP OUTPUT IF AVAILABLE
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          INTERFACE STATE CHANGE EVENTS (from syslog)
+          ============================================================
+          {% set dg_parsed = dying_gasp_raw.stdout | safe_json_parse %}
+          LINEPROTO/UPDOWN events:
+          {{ dg_parsed.outputs.get('show logging | include LINEPROTO', '(no events)') }}
+          {{ dg_parsed.outputs.get('show logging | include UPDOWN', '(no events)') }}
+          {{ dg_parsed.outputs.get('show logging | include changed state', '(no events)') }}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when:
+        - dying_gasp_raw is defined
+        - dying_gasp_raw.stdout is defined
+        - (dying_gasp_raw.stdout | safe_json_parse).success | default(false)
+
+    - name: 1708 MARK DIAGNOSTICS PHASE OK
+      ansible.builtin.set_fact:
+        phase_results: "{{ phase_results | combine({'diagnostics': 'ok'}) }}"
+
+  rescue:
+    - name: 1700R DIAGNOSTICS RESCUE
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          [DIAGNOSTICS] PHASE FAILED — SSH error collecting bundle
+          ============================================================
+          Diagnostic commands could not be retrieved from {{ MgmtIP }}.
+          Device may have become unreachable during the automation run,
+          or SSH session timed out during command collection.
+          Closure and AVA tag will still be written based on earlier phase results.
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    - name: 1700R SET DIAGNOSTICS FAILED
+      ansible.builtin.set_fact:
+        diag_success: false
+        phase_results: "{{ phase_results | combine({'diagnostics': 'failed'}) }}"
+        escalation_needed: true
+    # No re-raise: diagnostics failure does not block closure

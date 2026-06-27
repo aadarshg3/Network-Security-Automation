@@ -1,0 +1,375 @@
+---
+# Cisco-Router-Device-Down — Routing analysis (BGP vs static) + static next-hop ping.
+# All SSH to the primary uses the secondary jump, never the unreachable MgmtIP.
+
+- block:
+
+    - name: 1500 GATHER ROUTING ANALYSIS COMMANDS (via jump)
+      ansible.builtin.script: >
+        tasks/jump_ssh.py
+        'secondary_hostname={{ secondary_hostname | default(partner_neid) | default('') }}'
+        'platform={{ detected_platform | default("ios") }}'
+        'jump_password_override={{ jump_password_override | default('') }}'
+        'jump_user_override={{ jump_user_override | default('') }}'
+        '{{ partner_ip }}'
+        '{{ ansible_user }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ primary_lan_ip }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ (
+              (["show ip protocols", "show ip route summary", "show ip route static", "show ip route",
+                "show running-config | section router bgp"]
+               if detected_platform in ["ios", "ios_xe"]
+               else
+               ["show ip protocols", "show route summary", "show route static",
+                "show running-config formal | include router bgp"])
+              +
+              (detected_platform | get_bgp_discovery_commands)
+            ) | to_json }}'
+      args:
+        executable: python3
+      register: routing_raw
+      no_log: true
+      delegate_to: localhost
+
+    - name: 1501 PARSE ROUTING OUTPUT
+      ansible.builtin.set_fact:
+        routing_parsed: "{{ routing_raw.stdout | safe_json_parse }}"
+
+    - name: 1502 EXTRACT ROUTING TEXTS
+      ansible.builtin.set_fact:
+        show_ip_protocols:    >-
+          {{ routing_parsed.outputs.get('show ip protocols', '')
+             or routing_parsed.outputs.get('show protocols', '') }}
+        show_ip_route_summary: >-
+          {{ routing_parsed.outputs.get('show ip route summary', '')
+             or routing_parsed.outputs.get('show route summary', '') }}
+        show_ip_route_static: >-
+          {{ routing_parsed.outputs.get('show ip route static', '')
+             or routing_parsed.outputs.get('show route static', '') }}
+        show_ip_route_full: >-
+          {{ routing_parsed.outputs.get('show ip route', '')
+             or routing_parsed.outputs.get('show route', '') }}
+        show_running_bgp:     >-
+          {{ routing_parsed.outputs.get('show running-config | section router bgp', '')
+             or routing_parsed.outputs.get('show running-config formal | include router bgp', '') }}
+        bgp_all_summary_text: >-
+          {{ routing_parsed.outputs | merge_bgp_summary_outputs(detected_platform) }}
+
+    - name: 1503 DETERMINE ROUTING TYPE
+      ansible.builtin.set_fact:
+        has_bgp:                "{{ bgp_all_summary_text | is_bgp_active }}"
+        has_static:             "{{ (show_ip_route_static | parse_static_default_next_hop) | length > 0 }}"
+        bgp_vrf_map:            "{{ show_running_bgp | parse_bgp_vrf_map }}"
+        static_default_next_hop: "{{ show_ip_route_static | parse_static_default_next_hop }}"
+
+    - name: 1504 LOG ROUTING TYPE
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: "Routing type — BGP: {{ has_bgp }} | Static default present: {{ has_static }}"
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    - name: 1505 APPEND ROUTING OUTPUTS TO TICKET
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          {{ routing_cmd_item }}
+          ============================================================
+          {{ routing_parsed.outputs.get(routing_cmd_item, '(no output)') }}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      loop:
+        - "show ip protocols"
+        - "show ip route summary"
+        - "show ip route static"
+        - "show running-config | section router bgp"
+      loop_control:
+        loop_var: routing_cmd_item
+
+    - name: 1505B APPEND BGP SUMMARY TO TICKET
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          BGP summary
+          ============================================================
+          {{ bgp_all_summary_text if (bgp_all_summary_text | trim | length > 0) else '(no BGP neighbors / not running BGP)' }}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    # Static-only path: ping default next-hop via jump session
+    - name: 1515 PING STATIC DEFAULT NEXT-HOP (via jump)
+      ansible.builtin.script: >
+        tasks/jump_ssh.py
+        'secondary_hostname={{ secondary_hostname | default(partner_neid) | default('') }}'
+        'platform={{ detected_platform | default("ios") }}'
+        'jump_password_override={{ jump_password_override | default('') }}'
+        'jump_user_override={{ jump_user_override | default('') }}'
+        '{{ partner_ip }}'
+        '{{ ansible_user }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ primary_lan_ip }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ (["ping " + static_default_next_hop + " repeat 5 timeout 3",
+              "ping " + static_default_next_hop + " source " + MgmtIP + " repeat 5 timeout 3",
+              "traceroute " + static_default_next_hop + " timeout 3 probe 2",
+              "show ip arp | include " + static_default_next_hop]
+             + (["show ip interface " + wan_interface,
+                 "show interface " + wan_interface + " | include error|rate|CRC|input|output|reset"]
+                if wan_interface | default("") | length > 0 else [])
+            ) | to_json }}'
+      args:
+        executable: python3
+      register: static_nh_ping_raw
+      no_log: true
+      delegate_to: localhost
+      when:
+        - has_static
+        - static_default_next_hop | length > 0
+
+    - name: 1516 PARSE STATIC NEXT-HOP PING RESULT
+      ansible.builtin.set_fact:
+        static_nh_ping_parsed:   "{{ static_nh_ping_raw.stdout | safe_json_parse }}"
+        static_nh_ping_text:     "{{ (static_nh_ping_raw.stdout | safe_json_parse).outputs | dict2items | map(attribute='value') | join('\n') }}"
+        static_nh_tracert_text:  "{{ (static_nh_ping_raw.stdout | safe_json_parse).outputs.get('traceroute ' + static_default_next_hop + ' timeout 3 probe 2', '(not available)') }}"
+        static_nh_arp_text:      "{{ (static_nh_ping_raw.stdout | safe_json_parse).outputs.get('show ip arp | include ' + static_default_next_hop, '(no ARP entry)') }}"
+        static_exit_int_text:    >-
+          {{ (static_nh_ping_raw.stdout | safe_json_parse).outputs.get(
+               "show ip interface " + wan_interface, "(not available)") }}
+        static_exit_errors_text: >-
+          {{ (static_nh_ping_raw.stdout | safe_json_parse).outputs.get(
+               "show interface " + wan_interface + " | include error|rate|CRC|input|output|reset",
+               "(not available)") }}
+      when:
+        - has_static
+        - static_default_next_hop | length > 0
+        - static_nh_ping_raw is defined
+
+    - name: 1517 EVALUATE STATIC NEXT-HOP REACHABILITY
+      ansible.builtin.set_fact:
+        static_nh_reachable: >-
+          {{
+            (static_nh_ping_text | regex_search('Success rate is (\d+) percent', '\1') | first | int) > 0
+            if (static_nh_ping_text | regex_search('Success rate is (\d+) percent'))
+            else false
+          }}
+      when:
+        - has_static
+        - static_default_next_hop | length > 0
+        - static_nh_ping_parsed is defined
+
+    - name: 1517A CORROBORATE WAN+PE FROM NEXT-HOP / CONNECTED ROUTE
+      ansible.builtin.set_fact:
+        wan_pe_corroboration: "{{ show_ip_route_full | default('') | corroborate_wan_pe_from_static(show_ip_route_full | default('')) }}"
+      when:
+        - has_static
+        - static_default_next_hop | length > 0
+
+    - name: 1517B LOG WAN+PE CORROBORATION
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+          ── WAN/PE corroboration (next-hop matched to connected subnet) ──
+          {% if wan_pe_corroboration.matched | default(false) %}
+          [CORROBORATED] Next-hop {{ wan_pe_corroboration.pe_ip }} is on the connected
+          subnet of {{ wan_pe_corroboration.wan_interface }} → WAN = {{ wan_pe_corroboration.wan_interface }},
+          PE = {{ wan_pe_corroboration.pe_ip }} (high confidence, independent cross-check).
+          {% else %}
+          [NOT CORROBORATED] Could not match next-hop {{ static_default_next_hop }} to a
+          connected interface subnet — PE IP relies on next-hop value alone.
+          {% endif %}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when:
+        - has_static
+        - static_default_next_hop | length > 0
+        - wan_pe_corroboration is defined
+
+    - name: 1518 LOG STATIC NEXT-HOP PING RESULT
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          STATIC DEFAULT NEXT-HOP REACHABILITY TEST
+          ============================================================
+          PE candidate (static default next-hop): {{ static_default_next_hop }}
+          Reachable: {{ static_nh_reachable | default(false) }}
+
+          --- ARP entry ---
+          {{ static_nh_arp_text | default('(no ARP entry)') }}
+          {% if static_nh_arp_text | default('') | length < 5 %}
+          [ARP] WARNING: No ARP entry for next-hop {{ static_default_next_hop }} — possible L2 issue
+          {% endif %}
+
+          --- Exit Interface Errors/Status ---
+          {{ static_exit_int_text | default('(not available)') }}
+          {{ static_exit_errors_text | default('(not available)') }}
+
+          {% if static_nh_reachable | default(false) %}
+          [STATIC NEXT-HOP] REACHABLE — CE can ping the default gateway.
+          {% else %}
+          [STATIC NEXT-HOP] UNREACHABLE — CE cannot ping the default gateway ({{ static_default_next_hop }}).
+          WAN/PE connectivity appears broken at Layer-3.
+          {% endif %}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when:
+        - has_static
+        - static_default_next_hop | length > 0
+
+    # MOP: after static NH confirmed reachable, re-ping from iAutomate host
+    - name: 1518A RE-PING PRIMARY FROM IAUTOMATE AFTER STATIC NH CONFIRMED
+      ansible.builtin.script: >
+        tasks/ping.py
+        '{{ MgmtIP }}'
+        '{{ ping_count | default(5) }}'
+      args:
+        executable: python3
+      register: static_post_ping_raw
+      delegate_to: localhost
+      when:
+        - has_static
+        - static_default_next_hop | length > 0
+        - static_nh_reachable | default(false)
+
+    - name: 1518B SET POST-STATIC REACHABILITY
+      ansible.builtin.set_fact:
+        static_post_reachable: "{{ (static_post_ping_raw.stdout | safe_json_parse).packet_loss | int < 100 }}"
+      when: static_post_ping_raw is defined and static_post_ping_raw.stdout is defined
+
+    - name: 1518C LOG POST-STATIC RE-PING
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+          ── Re-ping primary after static next-hop confirmed ──
+          {% if static_post_reachable | default(false) %}
+          [RECOVERED] Router {{ MgmtIP }} is now reachable from management plane.
+          Static path intact — candidate for closure.
+          {% else %}
+          [STILL DOWN] Router {{ MgmtIP }} still unreachable from management plane
+          despite static next-hop being reachable. Escalate to NOC team.
+          {% endif %}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when: static_post_ping_raw is defined
+
+    - name: 1518D ESCALATE IF STILL DOWN AFTER STATIC CONFIRMED
+      ansible.builtin.set_fact:
+        escalation_needed: true
+      when:
+        - static_post_ping_raw is defined
+        - not (static_post_reachable | default(false))
+
+    - name: 1519 LOG WHEN NO STATIC NEXT-HOP FOUND
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          STATIC DEFAULT NEXT-HOP REACHABILITY TEST
+          ============================================================
+          [SKIPPED] No static default route next-hop found in routing table.
+          Static route appears missing or incorrect. Assign to Tier-2 team to
+          add/correct the static route.
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when:
+        - has_static
+        - static_default_next_hop | length == 0
+
+    - name: 1520 PARSE BGP NEIGHBOR-TO-VRF MAP
+      ansible.builtin.set_fact:
+        bgp_vrf_map: "{{ show_running_bgp | parse_bgp_vrf_map }}"
+      when: has_bgp
+
+    - name: 1521 PARSE BGP SUMMARY AND FIND STUCK NEIGHBORS
+      ansible.builtin.set_fact:
+        stuck_neighbors: "{{ bgp_all_summary_text | find_stuck_bgp_neighbors(bgp_vrf_map) }}"
+      when: has_bgp
+
+    - name: 1522 LOG BGP NEIGHBOR STATES
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          BGP NEIGHBOR ANALYSIS
+          ============================================================
+          {% if stuck_neighbors | length > 0 %}
+          [BGP] {{ stuck_neighbors | length }} non-Established neighbor(s) found:
+          {% for nb in stuck_neighbors %}
+            Neighbor : {{ nb.neighbor }}
+            AS       : {{ nb.as_number }}
+            VRF      : {{ nb.vrf if nb.vrf else 'global' }}
+            State    : {{ nb.state }}
+            Hint     : {{ nb.hint }}
+          {% endfor %}
+          {% else %}
+          [BGP] All neighbors are Established — no stuck sessions detected.
+          {% endif %}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when: has_bgp
+
+    - name: 1523 LOG WHEN BGP NOT ACTIVE
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          BGP NEIGHBOR ANALYSIS
+          ============================================================
+          [BGP] Not active on this device (static routing only).
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when: not has_bgp
+
+    - name: 1524 ESCALATE WHEN BGP ESTABLISHED BUT DEVICE STILL DOWN
+      ansible.builtin.set_fact:
+        escalation_needed: true
+      when:
+        - has_bgp
+        - stuck_neighbors | length == 0
+        - not primary_reachable
+
+    - name: 1525 MARK ROUTING ANALYSIS PHASE OK
+      ansible.builtin.set_fact:
+        phase_results: "{{ phase_results | combine({'routing_analysis': 'ok'}) }}"
+
+  rescue:
+    - name: 1500R ROUTING ANALYSIS RESCUE
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          [ROUTING ANALYSIS] PHASE FAILED — jump SSH error
+          ============================================================
+          Could not retrieve routing information via jump session.
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    - name: 1500R SET ROUTING ANALYSIS FAILED
+      ansible.builtin.set_fact:
+        has_bgp: false
+        has_static: false
+        stuck_neighbors: []
+        bgp_vrf_map: {}
+        static_default_next_hop: ""
+        phase_results: "{{ phase_results | combine({'routing_analysis': 'failed'}) }}"
+        escalation_needed: true

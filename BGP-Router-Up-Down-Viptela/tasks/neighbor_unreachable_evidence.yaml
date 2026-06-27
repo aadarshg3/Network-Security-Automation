@@ -1,0 +1,208 @@
+---
+# neighbor_unreachable_evidence.yaml — v10 (BUG 2 + BUG 3 fixed)
+#
+# Triggered when: neighbor_reachable = false
+# Purpose: Collect evidence from LOCAL device before Tier-2 escalation.
+#   GAP 3: route + ARP evidence to explain WHY peer is unreachable
+#   GAP 4: hold timer, keepalive, CPU, memory, platform health
+#
+# ALL SSH is to LOCAL device ({{ MgmtIP }}) — peer is unreachable.
+# Full block/rescue on every SSH task — failure writes warning, play continues.
+# No remediation — read-only commands only.
+#
+# BUG 2 FIX: Removed "| head 20" — not valid Cisco IOS pipe syntax.
+#   IOS supports: | include, | exclude, | begin, | section, | count
+#   "| head" is a Linux shell construct — causes IOS syntax error.
+#   Fixed: "show processes cpu sorted" (full output, no truncation)
+#
+# BUG 3 FIX: Replaced lineinfile with copy:content for 1073D.
+#   lineinfile with Jinja2 for loops and multiline content is unreliable.
+#   ansible.builtin.copy content: correctly handles Jinja2 loops and
+#   multiline output — same pattern as write_output.yaml task 1180.
+
+- name: "1073A-SSH RUN NEIGHBOR UNREACHABLE EVIDENCE — CEDGE"
+  block:
+    - name: "1073A-SSH RUN NEIGHBOR UNREACHABLE EVIDENCE — CEDGE"
+      ansible.builtin.script:
+        executable: /usr/bin/python3
+        cmd: >
+          roles/BGP-Router-Up-Down-Viptela/tasks/bgp_ssh.py
+          '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}",
+            "password": "{{ ansible_password }}",
+            "enable_password": "{{ ansible_password }}",
+            "device_type": "cisco_ios",
+            "commands": [
+              "show ip route {{ peer_sysip | default('') }}",
+              "show arp | include {{ peer_sysip | default('') }}",
+              "show ip bgp neighbors {{ peer_sysip | default('') }}",
+              "show logging | i BGP",
+              "show logging | include bgp",
+              "show processes cpu sorted",
+              "show processes memory sorted",
+              "show platform resources"
+            ]}'
+      register: neighbor_evidence_raw_cedge
+      delegate_to: localhost
+      no_log: true
+
+    - name: "1073A-PARSE CEDGE NEIGHBOR EVIDENCE"
+      set_fact:
+        neighbor_evidence_cedge: "{{ neighbor_evidence_raw_cedge.stdout | from_json }}"
+      when: >
+        neighbor_evidence_raw_cedge is defined and
+        neighbor_evidence_raw_cedge.failed == false and
+        neighbor_evidence_raw_cedge.stdout is defined
+
+  rescue:
+    - name: "1073A-RESCUE CEDGE EVIDENCE SSH FAILED — WRITE WARNING"
+      lineinfile:
+        path: "{{ output_file }}"
+        line: |
+          WARNING [NEIGHBOR EVIDENCE — CEDGE]: SSH for evidence collection failed.
+            Impact : Route, ARP, hold-timer, CPU, memory data unavailable.
+            Action : NOC to SSH to {{ MgmtIP }} manually and run:
+                     show ip route {{ peer_sysip | default('N/A') }}
+                     show arp | include {{ peer_sysip | default('N/A') }}
+                     show ip bgp neighbors {{ peer_sysip | default('N/A') }}
+                     show processes cpu sorted
+                     show processes memory sorted
+      delegate_to: localhost
+    - debug:
+        msg: "NEIGHBOR EVIDENCE SSH FAILED for {{ MgmtIP }} (cEdge) — NOC must collect manually"
+    - ansible.builtin.meta: clear_host_errors
+  when: >
+    ssh_ok | bool and
+    (platform == 'cedge' or platform == '') and
+    peer_sysip is defined and peer_sysip != ''
+
+- name: "1073B-SSH RUN NEIGHBOR UNREACHABLE EVIDENCE — VEDGE"
+  block:
+    - name: "1073B-SSH RUN NEIGHBOR UNREACHABLE EVIDENCE — VEDGE"
+      ansible.builtin.script:
+        executable: /usr/bin/python3
+        cmd: >
+          roles/BGP-Router-Up-Down-Viptela/tasks/bgp_ssh.py
+          '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}",
+            "password": "{{ ansible_password }}", "device_type": "cisco_ios",
+            "commands": [
+              {% if vpn_id | default('0') not in ['0', '', 'global'] %}
+              "show ip routes vpn {{ vpn_id }}",
+              {% else %}
+              "show ip routes",
+              {% endif %}
+              "show arp | include {{ peer_sysip | default('') }}",
+              "show bgp neighbor",
+              "show log | i BGP",
+              "show logging | i BGP",
+              "show system status | include Memory",
+              "show system status | include CPU"
+            ]}'
+      register: neighbor_evidence_raw_vedge
+      delegate_to: localhost
+      no_log: true
+
+    - name: "1073B-PARSE VEDGE NEIGHBOR EVIDENCE"
+      set_fact:
+        neighbor_evidence_vedge: "{{ neighbor_evidence_raw_vedge.stdout | from_json }}"
+      when: >
+        neighbor_evidence_raw_vedge is defined and
+        neighbor_evidence_raw_vedge.failed == false and
+        neighbor_evidence_raw_vedge.stdout is defined
+
+  rescue:
+    - name: "1073B-RESCUE VEDGE EVIDENCE SSH FAILED — WRITE WARNING"
+      lineinfile:
+        path: "{{ output_file }}"
+        line: |
+          WARNING [NEIGHBOR EVIDENCE — VEDGE]: SSH for evidence collection failed.
+            Impact : Route, ARP, hold-timer, CPU, memory data unavailable.
+            Action : NOC to SSH to {{ MgmtIP }} manually and run:
+                     show ip routes vpn {{ vpn_id | default('0') }}
+                     show arp | include {{ peer_sysip | default('N/A') }}
+                     show bgp neighbor
+                     show log | i BGP
+                     show system status | include Memory
+                     show system status | include CPU
+      delegate_to: localhost
+    - debug:
+        msg: "NEIGHBOR EVIDENCE SSH FAILED for {{ MgmtIP }} (vEdge) — NOC must collect manually"
+    - ansible.builtin.meta: clear_host_errors
+  when: >
+    ssh_ok | bool and
+    platform == 'vedge' and
+    peer_sysip is defined and peer_sysip != ''
+
+# Safe defaults — prevent undefined errors in write_output Jinja2 template
+- name: "1073C DEFAULT EVIDENCE DICT IF SSH FAILED OR NOT RUN"
+  set_fact:
+    neighbor_evidence_cedge: "{{ neighbor_evidence_cedge | default({'output': {}}) }}"
+    neighbor_evidence_vedge: "{{ neighbor_evidence_vedge | default({'output': {}}) }}"
+
+# BUG 3 FIX: Use ansible.builtin.copy content: instead of lineinfile.
+# lineinfile treats 'line' as a single string — Jinja2 for loops and multiline
+# content get collapsed or fail unpredictably.
+# copy: content: correctly evaluates Jinja2 including loops and writes the full
+# result as file content. We append to output_file by writing to a temp file
+# and then shell-appending, preserving the existing content before this section.
+- name: "1073D WRITE NEIGHBOR UNREACHABLE EVIDENCE SECTION TO TEMP FILE"
+  ansible.builtin.copy:
+    dest: "{{ output_dir }}/neighbor_evidence.tmp"
+    content: |
+      ================================================================
+      [5B] NEIGHBOR UNREACHABLE — EVIDENCE BUNDLE
+      ================================================================
+      Peer system-IP : {{ peer_sysip | default('N/A') }}
+      VPN            : {{ vpn_id | default('0') }}
+      Platform       : {{ platform | upper }}
+
+      Potential causes (check evidence below):
+        - Hold timer expiry  : BGP keepalive not received within hold-time window.
+                               Check 'show bgp neighbor' for Hold time and
+                               Keepalive interval. Look for last reset reason.
+        - Keepalive mismatch : Local and remote keepalive timers differ.
+                               Verify both sides have matching timer config.
+        - Interface flapping : Underlying interface bouncing causes BGP resets.
+                               Check 'show interface' for input/output errors.
+        - CPU/Memory high    : Device overloaded, BGP process starved.
+                               Check 'show system status | include CPU' and 'show system status | include Memory' output below.
+        - Routing issue      : No route to {{ peer_sysip | default('N/A') }}.
+                               Check 'show ip routes vpn {vpn_id}' output below.
+        - ARP missing        : Peer MAC not resolved.
+                               Check 'show arp' output below.
+
+      NOC Action — Before assigning Tier-2:
+        1. Review route evidence — is there a valid route to the peer?
+        2. Review ARP evidence  — is ARP resolving for the peer IP?
+        3. Review BGP neighbor detail — check hold timer, last reset reason
+        4. Review CPU/Memory   — is device overloaded?
+        5. Review BGP logs     — look for notification messages
+
+      ----------------------------------------------------------------
+      EVIDENCE DATA:
+      {% set ev = neighbor_evidence_cedge.output | default({})
+                  if (platform == 'cedge' or platform == '')
+                  else neighbor_evidence_vedge.output | default({}) %}
+      {% if ev %}
+      {% for cmd, out in ev.items() %}
+      --- {{ cmd }} ---
+      {{ out if out | trim | length > 0 else '(no output returned)' }}
+
+      {% endfor %}
+      {% else %}
+      NOTE: Evidence SSH failed — NOC must collect manually.
+            See WARNING message above for commands to run.
+      {% endif %}
+      ================================================================
+  delegate_to: localhost
+
+- name: "1073E APPEND EVIDENCE SECTION TO OUTPUT.DAT"
+  ansible.builtin.shell: "cat {{ output_dir }}/neighbor_evidence.tmp >> {{ output_file }}"
+  delegate_to: localhost
+  changed_when: true
+
+- name: "1073F REMOVE EVIDENCE TEMP FILE"
+  ansible.builtin.file:
+    path: "{{ output_dir }}/neighbor_evidence.tmp"
+    state: absent
+  delegate_to: localhost
+  ignore_errors: true

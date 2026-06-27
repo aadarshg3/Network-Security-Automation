@@ -1,0 +1,242 @@
+---
+# v7: task 1063 (VPN-specific parse) REMOVED — 'show bgp vpn X summary' is
+# invalid on vEdge OS 20.x (confirmed build 1372 syntax error).
+# Authoritative vEdge command: 'show bgp summary' (shows all VPNs in sections).
+# parse_bgp_state_vedge now handles multi-VPN output and filters by vpn_id.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TEMPLATE-MANAGED DETECTION
+# ─────────────────────────────────────────────────────────────────────────────
+
+- name: "1061 CHECK TEMPLATE-MANAGED STATUS — CEDGE"
+  set_fact:
+    template_managed: "{{ bgp_diag_cedge.output | default({}) | is_template_managed }}"
+  when: (platform == 'cedge' or platform == '') and bgp_diag_cedge is defined
+
+- name: "1061B CHECK TEMPLATE-MANAGED STATUS — VEDGE"
+  set_fact:
+    template_managed: "{{ bgp_diag_vedge.output | default({}) | is_template_managed }}"
+  when: platform == 'vedge' and bgp_diag_vedge is defined
+
+- name: "1061C DEFAULT TEMPLATE MANAGED TO FALSE IF DIAG UNAVAILABLE"
+  block:
+    - set_fact:
+        template_managed: false
+    - debug:
+        msg: >
+          TEMPLATE-MANAGED: Diagnostic bundle unavailable for {{ MgmtIP }}.
+          Defaulting to False (UNVERIFIED). NOC must confirm before any CLI action.
+    - lineinfile:
+        path: "{{ output_file }}"
+        line: "NOTE [TEMPLATE CHECK]: Diagnostic bundle unavailable — template-managed
+          status could not be verified. Assuming CLI-managed (unverified).
+          NOC: manually confirm before any config change."
+        delegate_to: localhost
+  when: template_managed is not defined
+
+- debug:
+    msg: >
+      Template-managed: {{ template_managed }}
+      {{ '(verified from device)' if (bgp_diag_vedge is defined or bgp_diag_cedge is defined)
+      else '(UNVERIFIED — no diagnostic data)' }}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TEMPLATE-MANAGED EARLY ESCALATION NOTICE
+# Written to output NOW so NOC sees it even if later tasks fail.
+# Automation will NOT touch device config — NOC must act manually.
+# ─────────────────────────────────────────────────────────────────────────────
+
+- name: "1061D WRITE TEMPLATE-MANAGED ESCALATION NOTICE TO OUTPUT"
+  lineinfile:
+    path: "{{ output_file }}"
+    line: |
+      ================================================================
+      TEMPLATE-MANAGED DEVICE — AUTOMATION SCOPE LIMITED
+      ================================================================
+      This device is under vManage template control. Detaching or
+      modifying a template can cause a full configuration rollback
+      and service outage. Automation will NOT perform any CLI config
+      changes on this device.
+
+      NOC ACTION REQUIRED:
+        1. Log into vManage UI → Configuration → Templates
+        2. Locate device: {{ DNSEntityName }}
+        3. Check if the BGP configuration in the template is correct
+        4. If BGP peer {{ peer_sysip }} is misconfigured in the template,
+           update the template and push to device
+        5. If BGP is down due to an external cause (peer side, routing),
+           investigate the peer device directly
+        6. Clear the vManage alarm manually if it does not self-clear
+           after BGP recovers
+      ================================================================
+  delegate_to: localhost
+  when: template_managed | bool
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BGP STATE PARSING — CEDGE
+# ─────────────────────────────────────────────────────────────────────────────
+
+- name: "1062 PARSE BGP STATE — CEDGE DEFAULT VRF"
+  set_fact:
+    bgp_neighbors: >
+      {{
+        (bgp_diag_cedge.output | default({'show ip bgp neighbors | include BGP': ''}))
+        .get('show ip bgp neighbors | include BGP', '')
+        | parse_bgp_state_cedge
+      }}
+  when: >
+    bgp_diag_cedge is defined and
+    (platform == 'cedge' or platform == '') and
+    (vpn_id | default('0') in ['0', ''])
+
+- name: "1062B PARSE BGP STATE — CEDGE NON-DEFAULT VRF"
+  set_fact:
+    bgp_neighbors: >
+      {{
+        (bgp_diag_cedge.output | default({}))
+        .get('show ip bgp vpnv4 vrf ' + (vpn_id | default('0')) + ' neighbors | include BGP', '')
+        | parse_bgp_state_cedge
+      }}
+  when: >
+    bgp_diag_cedge is defined and
+    (platform == 'cedge' or platform == '') and
+    vpn_id | default('0') not in ['0', '']
+
+- name: "1062C SET ACTIVE CEDGE BGP NEIGHBORS"
+  set_fact:
+    bgp_neighbors: "{{ bgp_state_cedge_vrf | default(bgp_state_cedge_default | default([])) }}"
+  when: platform == 'cedge' or platform == ''
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BGP STATE PARSING — VEDGE
+# Confirmed vEdge 20.x: 'show bgp summary' shows all VPNs in labelled sections.
+# parse_bgp_state_vedge filters by vpn_id when non-zero.
+# Fallback chain: global summary → empty with NOC message (rescue block).
+# ─────────────────────────────────────────────────────────────────────────────
+
+- name: "1063 PARSE BGP STATE — VEDGE"
+  block:
+    - name: "1063 PARSE BGP STATE FROM SHOW BGP SUMMARY"
+      set_fact:
+        bgp_neighbors: >
+          {{
+            (bgp_diag_vedge.output | default({}))
+            .get('show bgp summary', '')
+            | parse_bgp_state_vedge(vpn_id | default('0'))
+          }}
+
+    - name: "1063-WARN BGP PARSE RETURNED EMPTY — WRITE NOC MESSAGE"
+      block:
+        - debug:
+            msg: >
+              BGP PARSE: show bgp summary returned no neighbors for VPN {{ vpn_id | default('0') }} on {{ MgmtIP }}.
+              Raw output present: {{ (bgp_diag_vedge.output | default({})).get('show bgp summary', '') | length > 0 }}.
+              NOC: SSH to device and run 'show bgp summary' to verify BGP configuration.
+        - lineinfile:
+            path: "{{ output_file }}"
+            line: |
+              WARNING [BGP STATE]: No BGP neighbors found in VPN {{ vpn_id | default('0') }} on {{ MgmtIP }}.
+                Possible causes:
+                  - BGP is not configured in this VPN on the device
+                  - BGP process crashed (check: show bgp neighbor)
+                  - VPN ID in alarm ({{ vpn_id | default('0') }}) does not match device config
+                NOC: Run 'show bgp summary' on device. If BGP is configured but missing,
+                     escalate to SD-WAN tier-2 team.
+            delegate_to: localhost
+      when: bgp_neighbors | default([]) | length == 0
+
+  rescue:
+    - name: "1063-RESCUE BGP PARSE FAILED — WRITE NOC MESSAGE AND CONTINUE"
+      set_fact:
+        bgp_neighbors: []
+    - debug:
+        msg: >
+          BGP PARSE FAILED for {{ MgmtIP }}: filter function raised an exception.
+          bgp_diag_vedge available: {{ bgp_diag_vedge is defined }}.
+          NOC must SSH to device and run 'show bgp summary' manually.
+    - lineinfile:
+        path: "{{ output_file }}"
+        line: |
+          ERROR [BGP PARSE]: BGP state parsing raised an exception for {{ MgmtIP }}.
+            NOC: SSH to device and run:
+              show bgp summary
+              show bgp neighbor
+            Provide output to automation team for investigation.
+        delegate_to: localhost
+    - ansible.builtin.meta: clear_host_errors
+  when: platform == 'vedge' and bgp_diag_vedge is defined
+
+- name: "1063B BGP NEIGHBORS UNAVAILABLE — DIAG BUNDLE FAILED"
+  block:
+    - set_fact:
+        bgp_neighbors: []
+    - debug:
+        msg: >
+          BGP STATE UNKNOWN for {{ MgmtIP }}: diagnostic bundle did not run.
+          NOC: SSH to device and run 'show bgp summary' to check BGP session state.
+    - lineinfile:
+        path: "{{ output_file }}"
+        line: |
+          WARNING [BGP STATE]: BGP data unavailable — diagnostic bundle did not collect output.
+            NOC: SSH to device and run 'show bgp summary'.
+            Provide session state (established/active/idle) to automation team.
+        delegate_to: localhost
+  when: platform == 'vedge' and bgp_diag_vedge is not defined
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BGP ANALYSIS — COMMON (vEdge + cEdge)
+# ─────────────────────────────────────────────────────────────────────────────
+
+- debug:
+    msg: >
+      BGP neighbors found: {{ bgp_neighbors | length }}
+      {% for n in bgp_neighbors | default([]) %}
+      — {{ n.neighbor | default('?') }} AS{{ n.remote_as | default('?') }}
+        VPN{{ n.vrf | default('?') }} state={{ n.state | default('?') | upper }}
+      {% endfor %}
+
+- name: "1064 IDENTIFY STUCK BGP NEIGHBORS"
+  set_fact:
+    bgp_stuck_neighbors: "{{ bgp_neighbors | get_stuck_neighbors }}"
+
+- debug:
+    msg: >
+      Stuck neighbors: {{ bgp_stuck_neighbors | length }}
+      {% for n in bgp_stuck_neighbors | default([]) %}
+      — {{ n.neighbor | default('?') }} state={{ n.state | default('?') | upper }}
+      {% endfor %}
+
+- name: "1065 SET BGP ALL UP FLAG"
+  set_fact:
+    bgp_all_up: "{{ bgp_neighbors | length > 0 and bgp_stuck_neighbors | length == 0 }}"
+
+- name: "1066 SET CLOSURE READY IF BGP ALREADY UP"
+  set_fact:
+    closure_ready: true
+  when: bgp_all_up | bool
+
+- debug:
+    msg: >
+      BGP result:
+      {{ 'ALL ESTABLISHED — alarm is stuck on vManage' if bgp_all_up | bool
+      else 'NEIGHBORS DOWN — template-managed, NOC must act manually' if template_managed | bool
+      else 'NEIGHBORS DOWN — remediation will be attempted' if bgp_neighbors | length > 0
+      else 'NO DATA — diagnostic bundle unavailable. Manual investigation required.' }}
+
+- name: "1067 SET ESCALATE IF TEMPLATE MANAGED AND BGP DOWN"
+  set_fact:
+    escalate_tier2: true
+    escalate_reason: "template_managed"
+  when: template_managed | bool and not (bgp_all_up | bool)
+
+- name: "1068 WRITE BGP CHECK RESULT TO OUTPUT"
+  lineinfile:
+    path: "{{ output_file }}"
+    line: |
+      BGP State Check (VPN: {{ vpn_id | default('0') }}):
+        - Device Status   : {{ 'Template-Managed (CLI config changes NOT permitted — outage risk)' if template_managed | bool else 'CLI-Managed' }}{{ ' (UNVERIFIED)' if (bgp_diag_vedge is not defined and bgp_diag_cedge is not defined) else '' }}
+        - Total neighbors : {{ bgp_neighbors | length }}
+        - Established     : {{ bgp_neighbors | selectattr('state', 'equalto', 'established') | list | length }}
+        - Stuck / Down    : {{ bgp_stuck_neighbors | length }}
+        - BGP Status      : {{ 'ALL ESTABLISHED — alarm is stuck on vManage' if bgp_all_up | bool else 'NEIGHBORS DOWN' if bgp_neighbors | length > 0 else 'NO DATA — diagnostic bundle unavailable.' }}
+  delegate_to: localhost

@@ -1,0 +1,199 @@
+---
+# Cisco-Router-Device-Down — Partner Router Discovery
+# Queries ESP inventory for the secondary router at the same site (location ID =
+# first two NEID tokens, e.g. "deapega-r25pega"). ESP does a prefix match on
+# dnsEntityName, returning all routers at the site — same as production `cinfo`.
+#
+# ESP SIT is slow (legacy backend, ~40s observed for this query), so the call
+# uses a long timeout with retries. Failures are classified so NOC gets an
+# accurate reason (timeout vs HTTP error vs single-router site), not a generic
+# "API unreachable".
+
+- block:
+
+    - name: 1200 QUERY ESP INVENTORY FOR SECONDARY ROUTER
+      ansible.builtin.uri:
+        url: "{{ iAutomate_DEVICE_ATTRS_BASE_URL }}inventory-search?invlvl={{ dbESP | default('OPS') }}&dnsEntityName={{ location_id }}"
+        method: GET
+        return_content: true
+        validate_certs: false
+        # ESP SIT measured at ~40s for this query; give generous headroom.
+        timeout: "{{ esp_api_timeout | default(90) }}"
+        headers:
+          Content-Type: "application/json"
+        status_code: [200]
+      register: esp_partner_response
+      delegate_to: localhost
+      # Retry on slow/transient failures. status==-1 is a client-side timeout;
+      # ESP SIT intermittently returns instant 404 when the backend is degraded
+      # and recovers on its own, so retry with spacing to ride out the blip.
+      until: esp_partner_response.status | default(-1) == 200
+      retries: "{{ esp_api_retries | default(5) }}"
+      delay: "{{ esp_api_retry_delay | default(15) }}"
+
+    - name: 1201 PARSE ESP PARTNER RESPONSE
+      ansible.builtin.set_fact:
+        esp_partner_parsed: "{{ esp_partner_response.content | from_json }}"
+
+    - name: 1202 EXTRACT PARTNER CANDIDATES
+      ansible.builtin.set_fact:
+        # find_partner_candidates handles the confirmed ESP response shape:
+        #   - response key is "devices"; each entry wrapped as {"device": {...}}
+        #   - matches partner on first two NEID tokens (location ID)
+        #   - excludes primary, non-routers, unmanaged devices
+        partner_candidates: >-
+          {{
+            esp_partner_parsed.get('devices', [])
+            | find_partner_candidates(DNSEntityName, MgmtIP)
+          }}
+
+    - name: 1203 SET PARTNER FOUND FACTS
+      ansible.builtin.set_fact:
+        partner_candidates_count: "{{ partner_candidates | length }}"
+        partner_found: "{{ partner_candidates | length > 0 }}"
+        # Use dnsEntityName (full NEID) — entityHostName is a short label (e.g. "R26")
+        # and is unreliable for downstream NEID-based logic and logging.
+        partner_neid:  "{{ partner_candidates[0].dnsEntityName | default('') }}"
+        partner_ip:    "{{ partner_candidates[0].mgmtIPAddress | default('') }}"
+        single_router_site: "{{ partner_candidates | length == 0 }}"
+
+    - name: 1204 LOG PARTNER DISCOVERY OUTCOME
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          SECONDARY ROUTER DISCOVERY
+          ============================================================
+          Location ID (NEID minus last 3 chars) : {{ location_id }}
+          ESP API query : {{ iAutomate_DEVICE_ATTRS_BASE_URL }}inventory-search?invlvl={{ dbESP | default('OPS') }}&dnsEntityName={{ location_id }}
+          ESP API time  : {{ esp_partner_response.elapsed | default('?') }}s ({{ esp_partner_response.attempts | default(1) }} attempt(s))
+          Routers found at site : {{ partner_candidates | length + 1 }} total (including primary {{ DNSEntityName }})
+
+          {% if partner_found %}
+          [SECONDARY ROUTER] FOUND in ESP inventory.
+            NEID    : {{ partner_neid }}
+            Mgmt IP : {{ partner_ip }}
+          Next step: log into secondary and ping primary ({{ MgmtIP }}) to confirm
+          whether the device is truly down or only its management path is broken.
+          {% else %}
+          [SINGLE-ROUTER SITE] No secondary/redundant router found at location
+          '{{ location_id }}' in ESP inventory. This CE has no HA partner to
+          cross-check from.
+          {% endif %}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    # Single-router site is a definitive MOP terminal leaf, not an error.
+    # Set escalation with a precise reason so NOC knows there is no partner path.
+    - name: 1205 SET SINGLE-ROUTER ESCALATION CONTEXT
+      ansible.builtin.set_fact:
+        escalation_needed: true
+        failed_phase: "partner_discovery"
+        failure_reason: >-
+          Single-router site — no redundant/secondary router exists at location
+          {{ location_id }} in ESP inventory. Automation cannot cross-check the
+          primary from a partner, so it cannot distinguish a true hard-down from
+          a management-plane-only failure.
+        noc_next_action: >-
+          Dispatch a field engineer to verify {{ DNSEntityName }} ({{ MgmtIP }})
+          on site. There is no secondary CE to log in from; physical/console
+          check is required.
+      when:
+        - single_router_site | default(false)
+
+    - name: 1206 MARK PARTNER DISCOVERY PHASE OK
+      ansible.builtin.set_fact:
+        phase_results: "{{ phase_results | combine({'partner_discovery': 'ok'}) }}"
+
+  rescue:
+
+    # Classify the failure precisely instead of a generic "API unreachable".
+    - name: 1200R CLASSIFY ESP API FAILURE
+      ansible.builtin.set_fact:
+        esp_status: "{{ esp_partner_response.status | default(-1) }}"
+        esp_elapsed: "{{ esp_partner_response.elapsed | default('?') }}"
+        esp_attempts: "{{ esp_partner_response.attempts | default(esp_api_retries | default(3)) }}"
+
+    - name: 1200R DERIVE FAILURE REASON
+      ansible.builtin.set_fact:
+        partner_failure_kind: >-
+          {{
+            'timeout'      if esp_status | int == -1 else
+            'auth'         if esp_status | int in [401, 403] else
+            'not_found'    if esp_status | int == 404 else
+            'server_error' if esp_status | int >= 500 else
+            'parse_error'  if esp_status | int == 200 else
+            'unknown'
+          }}
+
+    - name: 1200R WRITE PRECISE FAILURE NOTE
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          [PARTNER DISCOVERY FAILED] — secondary router NOT identified
+          ============================================================
+          Where it failed : Phase 3 (Secondary Router Discovery) — ESP inventory lookup
+          Location ID     : {{ location_id }}
+          ESP API query   : {{ iAutomate_DEVICE_ATTRS_BASE_URL }}inventory-search?invlvl={{ dbESP | default('OPS') }}&dnsEntityName={{ location_id }}
+          HTTP status     : {{ esp_status }}
+          Time / attempts : {{ esp_elapsed }}s over {{ esp_attempts }} attempt(s)
+
+          {% if partner_failure_kind == 'timeout' %}
+          Why it failed   : The ESP inventory API did not respond within
+                            {{ esp_api_timeout | default(90) }}s after {{ esp_attempts }} attempts.
+                            The API is reachable but slow (SIT/legacy backend).
+          What was missing: A successful inventory response listing the site's routers.
+                            Without it the secondary router NEID/IP could not be obtained.
+          NOC next action : 1. Manually run `cinfo {{ location_id }}` to list site routers.
+                            2. Identify the redundant CE (same location, different suffix).
+                            3. Log into the secondary and ping primary {{ MgmtIP }} to
+                               confirm hard-down vs management-only failure.
+          {% elif partner_failure_kind == 'auth' %}
+          Why it failed   : ESP API returned HTTP {{ esp_status }} (authentication/authorization).
+          What was missing: Valid API credentials/permission for the inventory endpoint.
+          NOC next action : Escalate to the iAutomate platform team — ESP API auth issue.
+                            Meanwhile, manually run `cinfo {{ location_id }}` to find the partner.
+          {% elif partner_failure_kind == 'not_found' %}
+          Why it failed   : ESP API returned HTTP 404 for location {{ location_id }}.
+          What was missing: An inventory record for this location.
+          NOC next action : Verify the NEID is correct; check the device exists in ESP.
+          {% elif partner_failure_kind == 'server_error' %}
+          Why it failed   : ESP API returned HTTP {{ esp_status }} (server-side error).
+          What was missing: A valid response from the ESP backend.
+          NOC next action : Escalate to the iAutomate platform team — ESP API server error.
+                            Meanwhile, manually run `cinfo {{ location_id }}` to find the partner.
+          {% elif partner_failure_kind == 'parse_error' %}
+          Why it failed   : ESP API responded HTTP 200 but the body could not be parsed as JSON.
+          What was missing: A well-formed inventory response.
+          NOC next action : Escalate to the iAutomate platform team — unexpected ESP response format.
+          {% else %}
+          Why it failed   : ESP API call failed with status {{ esp_status }}.
+          What was missing: A successful inventory response.
+          NOC next action : Manually run `cinfo {{ location_id }}` to identify the secondary router,
+                            then log in and ping primary {{ MgmtIP }} to confirm device state.
+          {% endif %}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    - name: 1200R SET PARTNER FAILURE FACTS
+      ansible.builtin.set_fact:
+        partner_found: false
+        partner_neid:  ""
+        partner_ip:    ""
+        escalation_needed: true
+        failed_phase: "partner_discovery"
+        failure_reason: >-
+          Secondary router discovery failed ({{ partner_failure_kind }}): ESP
+          inventory API returned status {{ esp_status }} after {{ esp_attempts }}
+          attempt(s) over {{ esp_elapsed }}s. The partner router could not be
+          identified, so the primary could not be cross-checked from a secondary.
+        noc_next_action: >-
+          {% if partner_failure_kind == 'timeout' or partner_failure_kind in ['auth','server_error','unknown'] %}Manually run `cinfo {{ location_id }}` to list the site routers, identify
+          the secondary CE, log in, and ping primary {{ MgmtIP }} to confirm whether
+          the device is hard-down or only its management path is broken.{% else %}Verify the NEID/inventory record for {{ DNSEntityName }} in ESP.{% endif %}
+        phase_results: "{{ phase_results | combine({'partner_discovery': 'failed'}) }}"

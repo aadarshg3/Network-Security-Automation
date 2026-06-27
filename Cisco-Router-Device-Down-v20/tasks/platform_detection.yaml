@@ -1,0 +1,74 @@
+---
+# Cisco-Router-Device-Down — Platform Detection
+
+- block:
+
+    - name: 1300 RUN SHOW VERSION ON PRIMARY
+      ansible.builtin.script: >
+        tasks/device_ssh.py
+        'platform={{ detected_platform | default('ios') }}'
+        '{{ MgmtIP }}'
+        '{{ ansible_user }}'
+        '{{ ansible_password }}'
+        '{{ ["show version"] | to_json }}'
+      args:
+        executable: python3
+      register: show_version_raw
+      no_log: true
+      delegate_to: localhost
+
+    - name: 1301 PARSE SHOW VERSION OUTPUT
+      ansible.builtin.set_fact:
+        show_version_parsed: "{{ show_version_raw.stdout | safe_json_parse }}"
+
+    - name: 1303 EXTRACT SHOW VERSION TEXT
+      ansible.builtin.set_fact:
+        show_version_text: "{{ (show_version_parsed.outputs | default({})).get('show version', '') }}"
+
+    - name: 1304 SCORE PLATFORM FROM SHOW VERSION
+      ansible.builtin.set_fact:
+        detected_platform: "{{ show_version_text | extract_platform }}"
+      when: show_version_text | length > 0
+
+    - name: 1305 FALLBACK PLATFORM FROM INVENTORY MAKE
+      ansible.builtin.set_fact:
+        detected_platform: "ios"
+      when: show_version_text | length == 0
+
+    - name: 1306 LOG DETECTED PLATFORM
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: "Detected platform: {{ detected_platform }} (show_version length: {{ show_version_text | length }})"
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    - name: 1307 MARK PLATFORM DETECTION PHASE OK
+      ansible.builtin.set_fact:
+        phase_results: "{{ phase_results | combine({'platform_detection': 'ok'}) }}"
+
+  rescue:
+    - name: 1300R PLATFORM DETECTION RESCUE
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          [PLATFORM DETECTION] PHASE FAILED — SSH to {{ MgmtIP }}
+          ============================================================
+          Cannot SSH to device to run 'show version'.
+          Defaulting to platform: ios.
+          Check SSH credentials (ansible_user, ansible_password) and
+          TCP/22 connectivity from iAutomate server to {{ MgmtIP }}.
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    - name: 1300R SET PLATFORM DEFAULT
+      ansible.builtin.set_fact:
+        detected_platform: "ios"
+        show_version_text: ""
+        phase_results: "{{ phase_results | combine({'platform_detection': 'failed'}) }}"
+        # No escalation: a failed platform probe is benign. On the reachable path
+        # the device is UP (it answered ICMP); SSH for 'show version' is best-effort.
+        # Escalation is driven by device_verified_up downstream, not by this probe.

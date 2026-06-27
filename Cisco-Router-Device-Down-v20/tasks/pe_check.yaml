@@ -1,0 +1,236 @@
+---
+# Cisco-Router-Device-Down — PE IP derivation + reachability test.
+
+- block:
+
+    # Only gather WAN interface config when WAN interface was identified
+    - name: 1750 GATHER WAN INTERFACE CONFIG FOR PE DERIVATION (via jump)
+      ansible.builtin.script: >
+        tasks/jump_ssh.py
+        'secondary_hostname={{ secondary_hostname | default(partner_neid) | default('') }}'
+        'platform={{ detected_platform | default("ios") }}'
+        'jump_password_override={{ jump_password_override | default('') }}'
+        'jump_user_override={{ jump_user_override | default('') }}'
+        '{{ partner_ip }}'
+        '{{ ansible_user }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ primary_lan_ip }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ ["show running-config interface " + wan_interface,
+             "show ip interface " + wan_interface] | to_json }}'
+      args:
+        executable: python3
+      register: wan_config_raw
+      no_log: true
+      delegate_to: localhost
+      when: wan_interface | length > 0
+
+    - name: 1751 PARSE WAN CONFIG OUTPUT
+      ansible.builtin.set_fact:
+        wan_config_parsed: "{{ wan_config_raw.stdout | safe_json_parse }}"
+      when: wan_interface | length > 0
+
+    - name: 1752 EXTRACT WAN CONFIG TEXTS
+      ansible.builtin.set_fact:
+        wan_running_section: "{{ wan_config_parsed.outputs.get('show running-config interface ' + wan_interface, '') }}"
+      when: wan_interface | length > 0
+
+    - name: 1753 EXTRACT WAN IP AND MASK
+      ansible.builtin.set_fact:
+        wan_ip_mask: "{{ wan_running_section | parse_interface_ip_mask(wan_interface) }}"
+      when: wan_interface | length > 0
+
+    - name: 1754 SET WAN IP AND MASK FACTS
+      ansible.builtin.set_fact:
+        wan_ip:   "{{ wan_ip_mask[0] | default('') }}"
+        wan_mask: "{{ wan_ip_mask[1] | default('') }}"
+      when: wan_interface | length > 0
+
+    - name: 1755 DERIVE PE IP (THREE METHODS)
+      ansible.builtin.set_fact:
+        pe_derivation: >-
+          {{
+            wan_ip | default('')
+            | derive_pe_ip(
+                wan_mask | default(''),
+                bgp_all_summary_text | default(''),
+                static_default_next_hop | default('')
+              )
+          }}
+        pe_ip:         "{{ (wan_ip | default('') | derive_pe_ip(wan_mask | default(''), bgp_all_summary_text | default(''), static_default_next_hop | default(''))).pe_ip }}"
+        pe_confidence: "{{ (wan_ip | default('') | derive_pe_ip(wan_mask | default(''), bgp_all_summary_text | default(''), static_default_next_hop | default(''))).confidence }}"
+
+    - name: 1756 LOG PE IP DERIVATION RESULT
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+          PE IP derived: {{ pe_ip if pe_ip else 'NOT DERIVABLE' }} (confidence: {{ pe_confidence }})
+          Method: {{ pe_derivation.method | default('N/A') }}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when: pe_ip | length > 0
+
+    # PE reachability test — only when PE IP is known
+    - name: 1760 PING PE FROM CE (GLOBAL TABLE via jump)
+      ansible.builtin.script: >
+        tasks/jump_ssh.py
+        'secondary_hostname={{ secondary_hostname | default(partner_neid) | default('') }}'
+        'platform={{ detected_platform | default("ios") }}'
+        'jump_password_override={{ jump_password_override | default('') }}'
+        'jump_user_override={{ jump_user_override | default('') }}'
+        '{{ partner_ip }}'
+        '{{ ansible_user }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ primary_lan_ip }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ ["ping " + pe_ip + " repeat 5 timeout 3",
+             "show ip arp | include " + pe_ip] | to_json }}'
+      args:
+        executable: python3
+      register: pe_check_raw
+      no_log: true
+      delegate_to: localhost
+      when: pe_ip | length > 0
+
+    - name: 1761 PING PE FROM CE (VRF-AWARE via jump)
+      ansible.builtin.script: >
+        tasks/jump_ssh.py
+        'secondary_hostname={{ secondary_hostname | default(partner_neid) | default('') }}'
+        'platform={{ detected_platform | default("ios") }}'
+        'jump_password_override={{ jump_password_override | default('') }}'
+        'jump_user_override={{ jump_user_override | default('') }}'
+        '{{ partner_ip }}'
+        '{{ ansible_user }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ primary_lan_ip }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ ["ping vrf " + (stuck_neighbors[0].vrf if stuck_neighbors | length > 0 and stuck_neighbors[0].vrf else "default") + " " + pe_ip + " repeat 5 timeout 3",
+             "show ip arp vrf " + (stuck_neighbors[0].vrf if stuck_neighbors | length > 0 and stuck_neighbors[0].vrf else "default") + " | include " + pe_ip] | to_json }}'
+      args:
+        executable: python3
+      register: pe_check_vrf_raw
+      no_log: true
+      delegate_to: localhost
+      when:
+        - pe_ip | length > 0
+        - stuck_neighbors | length > 0
+        - stuck_neighbors[0].vrf | default('') | length > 0
+
+    - name: 1762 PARSE PE CHECK OUTPUT (GLOBAL)
+      ansible.builtin.set_fact:
+        pe_check_parsed: "{{ pe_check_raw.stdout | safe_json_parse }}"
+        pe_ping_text:    "{{ (pe_check_raw.stdout | safe_json_parse).outputs.get('ping ' + pe_ip + ' repeat 5 timeout 3', '') }}"
+        pe_arp_text:     "{{ (pe_check_raw.stdout | safe_json_parse).outputs.get('show ip arp | include ' + pe_ip, '') }}"
+      when: pe_ip | length > 0
+
+    - name: 1763 EVALUATE PE ARP AND REACHABILITY
+      ansible.builtin.set_fact:
+        pe_reachable: >-
+          {{
+            (pe_ping_text | regex_search('Success rate is (\d+) percent', '\1') | first | int) > 0
+            if (pe_ping_text | regex_search('Success rate is (\d+) percent'))
+            else false
+          }}
+        pe_arp_present:  "{{ pe_ip in pe_arp_text }}"
+      when: pe_ip | length > 0
+
+    - name: 1764 APPEND PE CHECK OUTPUT TO TICKET
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          PE REACHABILITY CHECK
+          ============================================================
+          PE IP (derived): {{ pe_ip }}
+          Derivation method: {{ pe_derivation.method | default('N/A') }}
+          Confidence: {{ pe_confidence | upper }}
+
+          --- ping {{ pe_ip }} (from CE global table) ---
+          {{ pe_ping_text | default('(ping not executed)') }}
+
+          --- show ip arp | include {{ pe_ip }} ---
+          {{ pe_arp_text | default('(no ARP entry found)') }}
+
+          {% if pe_reachable | default(false) %}
+          [PE CHECK] REACHABLE — CE can ping PE. Layer-3 WAN link is up.
+          ARP resolved: {{ 'Yes' if pe_arp_present | default(false) else 'No — may indicate layer-2 issue' }}
+          {% else %}
+          [PE CHECK] UNREACHABLE — CE cannot ping PE ({{ pe_ip }}).
+          ARP resolved: {{ 'No' if not pe_arp_present | default(false) else 'Yes — ARP present but ping fails (routing/policy issue)' }}
+          {% endif %}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when: pe_ip | length > 0
+
+    # The old code incorrectly said "No static default route next-hop"
+    # even when static_default_next_hop was populated.
+    - name: 1770 APPEND MANUAL NOTE WHEN PE IP NOT DERIVABLE
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          PE CHECK — AUTOMATED DERIVATION NOT POSSIBLE
+          ============================================================
+          {% if static_default_next_hop | length > 0 %}
+          Static default next-hop identified: {{ static_default_next_hop }}
+          WAN interface subnet is wider than /30 — PE IP cannot be confirmed
+          by arithmetic alone from the CE side.
+          Recommended: Ping {{ static_default_next_hop }} from the CE to test
+          default gateway reachability (see STATIC NEXT-HOP test above).
+          {% elif wan_ip | default('') | length == 0 %}
+          WAN interface IP/mask not found — WAN interface was not identified
+          with sufficient confidence (confidence: {{ wan_confidence }}).
+          {% else %}
+          WAN interface IP {{ wan_ip }}/{{ wan_mask }} found but subnet is
+          wider than /30 — cannot determine PE address by arithmetic.
+          No BGP neighbor found on the WAN subnet.
+          No static default route next-hop available.
+          {% endif %}
+
+          Manual Gen-E lookup steps:
+            1. Open Gen-E portal → search circuit by NEID: {{ DNSEntityName }}
+            2. Note the PE router hostname and IP.
+            3. From the CE ({{ MgmtIP }}), run: ping <PE-IP> repeat 5
+            4. From the CE, run: show ip arp | include <PE-IP>
+            5. If ARP missing → L2/physical-layer fault; assign NOC team.
+               If ARP present but ping fails → L3 routing fault; assign NOC team.
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when: pe_ip | length == 0
+
+    - name: 1780 MARK PE CHECK PHASE OK
+      ansible.builtin.set_fact:
+        phase_results: "{{ phase_results | combine({'pe_check': 'ok'}) }}"
+
+  rescue:
+    - name: 1750R PE CHECK RESCUE
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          [PE CHECK] PHASE FAILED — SSH error during PE derivation
+          ============================================================
+          Could not retrieve WAN interface configuration for PE derivation.
+          {% if static_default_next_hop | length > 0 %}
+          Static default next-hop from routing table: {{ static_default_next_hop }}
+          Manual ping test: SSH to {{ MgmtIP }} and run: ping {{ static_default_next_hop }} repeat 5
+          {% endif %}
+          Automation will continue with diagnostics.
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    - name: 1750R SET PE CHECK FAILED
+      ansible.builtin.set_fact:
+        pe_ip: ""
+        pe_confidence: "none"
+        pe_reachable: false
+        pe_arp_present: false
+        phase_results: "{{ phase_results | combine({'pe_check': 'failed'}) }}"
+        escalation_needed: true

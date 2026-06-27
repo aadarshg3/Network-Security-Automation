@@ -1,0 +1,56 @@
+---
+- name: "1164 QUERY VMANAGE ALARMS FOR THIS DEVICE"
+  uri:
+    url: "https://{{ vmanage_ip }}:{{ vmanagePort }}/dataservice/alarms"
+    method: POST
+    headers: "{{ vmanage_headers }}"
+    body_format: json
+    body:
+      query:
+        condition: "AND"
+        rules:
+          - value:
+              - "true"
+            field: "active"
+            type: "string"
+            operator: "in"
+          - value:
+              - "BFD_TLOC"
+            field: "rule_name_display"
+            type: "string"
+            operator: "in"
+          - value:
+              - "{{ DNSEntityName }}"
+            field: "host_name"
+            type: "string"
+            operator: "in"
+      size: 10000
+    validate_certs: no
+    return_content: yes
+    status_code: [200]
+  register: vmanage_alarms_response
+  delegate_to: localhost
+  no_log: true
+  failed_when: false
+  when: vmanage_authenticated | bool
+
+- name: "1165 EXTRACT VMANAGE ALARM UUIDS FOR THIS DEVICE"
+  set_fact:
+    vmanage_alarm_uuids: "{{ vmanage_alarms_response.json.data | default([]) | map(attribute='uuid') | list }}"
+  when: vmanage_authenticated | bool and vmanage_alarms_response.status is defined and vmanage_alarms_response.status == 200
+
+- name: "1166 CLEAR VMANAGE ALARMS"
+  uri:
+    url: "https://{{ vmanage_ip }}:{{ vmanagePort }}/dataservice/alarms/clear"
+    method: POST
+    headers: "{{ vmanage_headers }}"
+    body_format: json
+    body:
+      alarm_uuid: "{{ item }}"
+    validate_certs: no
+    status_code: [200, 404]
+  loop: "{{ vmanage_alarm_uuids | default([]) }}"
+  delegate_to: localhost
+  no_log: true
+  failed_when: false
+  when: vmanage_authenticated | bool and vmanage_alarm_uuids is defined and vmanage_alarm_uuids | length > 0

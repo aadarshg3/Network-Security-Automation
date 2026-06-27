@@ -1,0 +1,97 @@
+---
+- block:
+    - name: "1010 INCLUDE INITIALIZE RUN TASKS"
+      include_tasks: initialize_run.yaml
+
+    - name: "1020 INCLUDE INPUT GATHERING TASKS"
+      include_tasks: input_gathering.yaml
+
+    - name: "1040 RUN PING CHECK TASKS"
+      include_tasks: ping.yaml
+
+    - name: "1050 RUN DEVICE SSH AND PLATFORM DETECTION TASKS"
+      include_tasks: device_ssh.yaml
+      when: bfd_device_results.ping_test.result is defined and 'successful' in bfd_device_results.ping_test.result
+
+    - block:
+        - name: "1055 DISCOVER VMANAGE AND AUTHENTICATE"
+          include_tasks: vmanage_discovery.yaml
+
+        - name: "1060 RUN BFD SESSION CHECK TASKS"
+          include_tasks: bfd_check.yaml
+          when: ssh_ok | bool
+
+        - name: "1070 RUN BFD UP PATH TASKS"
+          include_tasks: bfd_up_path.yaml
+          when: ssh_ok | bool and bfd_up | bool
+
+        - name: "1080 RUN CONTROL TLOC CHECK TASKS"
+          include_tasks: control_tloc_check.yaml
+          when: ssh_ok | bool and not (bfd_up | bool)
+
+        - name: "1090 RUN INTERFACE CHECK TASKS"
+          include_tasks: interface_check.yaml
+          when: ssh_ok | bool and not (bfd_up | bool) and control_tloc_up | bool
+
+        - name: "1100 RUN REDUNDANT ROUTER CHECK TASKS"
+          include_tasks: redundant_router.yaml
+          when: ssh_ok | bool and not (bfd_up | bool) and not (tloc_local | bool)
+
+        - name: "1110 RUN SCOPE CHECK TASKS"
+          include_tasks: scope_check.yaml
+          when: ssh_ok | bool and not (bfd_up | bool)
+
+        - name: "1120 RUN SINGLE PEER PATH TASKS"
+          include_tasks: single_peer_path.yaml
+          when: bfd_scope == 'single'
+
+        - name: "1130 RUN ALL PEERS PATH TASKS"
+          include_tasks: all_peers_path.yaml
+          when: bfd_scope == 'all' or bfd_scope == 'control_down'
+
+        - name: "1140 RUN INTERFACE REMEDIATION TASKS"
+          include_tasks: interface_remediation.yaml
+          when: >
+            ssh_ok | bool and
+            not (bfd_up | bool) and
+            control_tloc_up | bool and
+            interface_down | default(false) | bool and
+            tloc_local | default(true) | bool
+
+        - name: "1150 RUN POST-REMEDIATION BFD CHECK TASKS"
+          include_tasks: post_remediation.yaml
+          when: remediation_attempted | bool
+
+        - name: "1160 RUN ALARM CLEARANCE TASKS"
+          include_tasks: alarm_clearance.yaml
+          when: vmanage_authenticated | bool
+
+      when: >
+        bfd_device_results.ping_test is defined and
+        bfd_device_results.ssh_test is defined and
+        'successful' in bfd_device_results.ping_test.result and
+        'successful' in bfd_device_results.ssh_test.result
+
+    - name: "1180 WRITE FORMATTED REPORT"
+      include_tasks: write_output.yaml
+
+    - name: "1190 READ OUTPUT.DAT"
+      ansible.builtin.shell: "cat {{ output_file }}"
+      register: output_content
+      delegate_to: localhost
+      changed_when: false
+
+    - set_fact:
+        response_msg: "{{ output_content.stdout | string }}"
+
+  rescue:
+    - name: "1200 READ OUTPUT.DAT IN RESCUE"
+      ansible.builtin.shell: "cat {{ output_file }}"
+      register: output_content
+      delegate_to: localhost
+      changed_when: false
+      ignore_errors: true
+
+    - set_fact:
+        status_code: 2
+        response_msg: "{{ output_content.stdout | default('Playbook execution failed. No output available.') | string }}. Engage NOC for manual troubleshooting."

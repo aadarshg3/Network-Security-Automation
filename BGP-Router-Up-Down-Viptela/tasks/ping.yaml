@@ -1,0 +1,28 @@
+---
+- name: "1041 TEST PING TO DEVICE"
+  command: "ping -c 5 {{ MgmtIP }}"
+  register: pingResult
+  ignore_errors: true
+  delegate_to: localhost
+
+- name: "1042 ANALYZE PING RESULT"
+  set_fact:
+    packetLoss: "{{ (pingResult.stdout | regex_search('(\\d+)% packet loss', '\\1') or ['unknown']) | first }}"
+
+- name: "1043 SET PING REACHABLE FLAG"
+  set_fact:
+    ping_reachable: "{{ pingResult.rc == 0 }}"
+
+- name: "1044 SET ESCALATE IF PING FAILED"
+  set_fact:
+    escalate_tier2: true
+  when: not (ping_reachable | bool)
+
+- name: "1045 WRITE PING RESULT TO OUTPUT"
+  lineinfile:
+    path: "{{ output_file }}"
+    insertafter: 'Observations:'
+    line: |
+      Device Reachability:
+        - Ping to {{ MgmtIP }}: {{ 'Successful — 0% Packet Loss — OK' if pingResult.rc == 0 else 'FAILED — ' + (packetLoss | string) + '% Packet Loss — Engage NOC' }}
+  delegate_to: localhost

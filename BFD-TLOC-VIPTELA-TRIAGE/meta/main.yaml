@@ -1,0 +1,7 @@
+---
+galaxy_info:
+  author: HCL Network Automation
+  description: BFD-TLOC-VIPTELA-TRIAGE
+  license: proprietary
+  min_ansible_version: "2.9"
+dependencies: []

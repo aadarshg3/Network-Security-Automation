@@ -1,0 +1,82 @@
+---
+# Cisco-Router-Device-Down — Primary Reachability
+
+- block:
+
+    - name: 1100 PING PRIMARY FROM IAUTOMATE HOST
+      ansible.builtin.script: >
+        tasks/ping.py
+        '{{ MgmtIP }}'
+        '{{ ping_count | default(5) }}'
+      args:
+        executable: python3
+      register: primary_ping_raw
+      delegate_to: localhost
+
+    - name: 1101 PARSE PRIMARY PING RESULT
+      ansible.builtin.set_fact:
+        primary_ping_parsed: "{{ primary_ping_raw.stdout | safe_json_parse }}"
+
+    - name: 1102 SET PRIMARY REACHABILITY FACT
+      ansible.builtin.set_fact:
+        primary_reachable: "{{ primary_ping_parsed.packet_loss | int < 100 }}"
+        packet_loss:       "{{ primary_ping_parsed.packet_loss | int }}"
+        primary_ping_output: "{{ primary_ping_parsed.output | default('') }}"
+
+    - name: 1103 APPEND PRIMARY PING RESULT TO OUTPUT
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          PRIMARY PING ({{ MgmtIP }})
+          ============================================================
+          {{ primary_ping_output }}
+
+          Primary reachable from iAutomate host: {{ primary_reachable }} (loss {{ packet_loss }}%)
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    - name: 1104 LOG PRIMARY REACHABILITY STATUS
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+          {% if primary_reachable %}
+          [PRIMARY] REACHABLE — Device responds to ICMP from iAutomate management plane.
+          {% else %}
+          [PRIMARY] UNREACHABLE — Device does not respond to ICMP from iAutomate management plane.
+          Initiating secondary (partner router) verification path.
+          {% endif %}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    - name: 1105 MARK PRIMARY REACHABILITY PHASE OK
+      ansible.builtin.set_fact:
+        phase_results: "{{ phase_results | combine({'primary_reachability': 'ok'}) }}"
+
+  rescue:
+    - name: 1100R PRIMARY REACHABILITY RESCUE
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          [PRIMARY REACHABILITY] PHASE FAILED
+          ============================================================
+          ping.py execution failed — could not assess ICMP reachability to {{ MgmtIP }}.
+          Treating device as unreachable and initiating partner discovery.
+          Check iAutomate server network connectivity to management subnet.
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    - name: 1100R SET PRIMARY UNREACHABLE
+      ansible.builtin.set_fact:
+        primary_reachable: false
+        packet_loss: 100
+        phase_results: "{{ phase_results | combine({'primary_reachability': 'failed'}) }}"
+        # No escalation here: unreachable routes to the partner/secondary path,
+        # which may resolve the incident. If the device is never verified up,
+        # closure escalates via the 'not device_verified_up' gate.

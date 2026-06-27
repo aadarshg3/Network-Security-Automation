@@ -1,0 +1,73 @@
+---
+# v8 fixes:
+# - Bug B: task 1079 used .rc which is absent on module-level failures
+#          Fixed: use .failed | default(true) instead of .rc == 0
+# - Bug C: (history) — clear command went through multiple revisions
+# - Jinja2: default(\"0\") → default('0') in both cEdge and vEdge tasks
+# - Added rescue block: any unhandled exception writes NOC message and continues
+# v16 — Comment correction: vEdge BGP clear confirmed on live vEdge 20.3.1:
+#        'clear bgp neighbor {ip}' → prompts for VPN interactively (automation blocks)
+#        'clear bgp neighbor {ip} vpn {vpn_id}' → executes immediately (correct)
+#        build_clear_commands_vedge filter uses the correct form
+
+- name: "1076 LOG BGP REMEDIATION START"
+  lineinfile:
+    path: "{{ output_file }}"
+    line: |
+      BGP Session Remediation:
+        - Action    : Clearing stuck BGP session(s) for VPN {{ vpn_id | default('0') }}
+        - Neighbors : {{ bgp_stuck_neighbors | map(attribute='neighbor') | list | join(', ') }}
+        - Guard     : Single neighbor, VRF-scoped only — never global clear
+  delegate_to: localhost
+
+- name: "1077 CLEAR STUCK BGP SESSIONS — CEDGE"
+  ansible.builtin.script:
+    executable: /usr/bin/python3
+    cmd: >
+      roles/BGP-Router-Up-Down-Viptela/tasks/bgp_ssh.py
+      '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}",
+        "password": "{{ ansible_password }}", "device_type": "cisco_ios",
+        "commands": {{ bgp_stuck_neighbors | build_clear_commands_cedge(vpn_id | default('0')) | tojson }}}'
+  register: bgp_clear_raw_cedge
+  when: (platform == 'cedge' or platform == '') and bgp_stuck_neighbors | length > 0
+  delegate_to: localhost
+  no_log: true
+  ignore_errors: true
+
+# vEdge BGP clear — confirmed on live vEdge 20.3.1:
+# Correct: 'clear bgp neighbor {ip} vpn {vpn_id}' (VPN mandatory — omitting prompts interactively)
+# Wrong:   'clear bgp {ip}' (command not found on vEdge 20.x)
+- name: "1077B CLEAR STUCK BGP SESSIONS — VEDGE"
+  ansible.builtin.script:
+    executable: /usr/bin/python3
+    cmd: >
+      roles/BGP-Router-Up-Down-Viptela/tasks/bgp_ssh.py
+      '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}",
+        "password": "{{ ansible_password }}", "device_type": "cisco_ios",
+        "commands": {{ bgp_stuck_neighbors | build_clear_commands_vedge(vpn_id | default('0')) | tojson }}}'
+  register: bgp_clear_raw_vedge
+  when: platform == 'vedge' and bgp_stuck_neighbors | length > 0
+  delegate_to: localhost
+  no_log: true
+  ignore_errors: true
+
+- name: "1078 SET REMEDIATION ATTEMPTED FLAG"
+  set_fact:
+    remediation_attempted: true
+
+# FIX v8 — use .failed instead of .rc
+# When ansible.builtin.script fails at module level (not script level),
+# the registered result has no .rc key → AttributeError crashes the task.
+# .failed is ALWAYS present in Ansible registered results regardless of failure mode.
+- name: "1079 WRITE BGP CLEAR RESULT"
+  lineinfile:
+    path: "{{ output_file }}"
+    line: |
+      BGP Clear Executed:
+        - Platform  : {{ platform | upper }}
+        - cEdge     : {% if bgp_clear_raw_cedge is defined %}{{ 'OK — command sent' if not (bgp_clear_raw_cedge.failed | default(true) | bool) else 'FAILED — see recheck below' }}{% else %}Skipped (not cEdge){% endif %}
+
+        - vEdge     : {% if bgp_clear_raw_vedge is defined %}{{ 'OK — command sent' if not (bgp_clear_raw_vedge.failed | default(true) | bool) else 'FAILED — see recheck below' }}{% else %}Skipped (not vEdge){% endif %}
+
+        Note: BGP state will be re-verified below regardless of clear result.
+  delegate_to: localhost

@@ -1,0 +1,95 @@
+---
+- name: "1111 RUN OMP PEERS (VEDGE)"
+  ansible.builtin.script:
+    executable: /usr/bin/python3
+    cmd: >
+      roles/BFD-TLOC-VIPTELA-TRIAGE/tasks/bfd_ssh.py
+      '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}", "password": "{{ ansible_password }}", "device_type": "cisco_ios", "commands": ["show omp peers", "show omp tlocs"]}'
+  register: omp_raw_vedge
+  when: platform == 'vedge'
+  delegate_to: localhost
+  no_log: true
+  ignore_errors: true
+
+- name: "1112 RUN OMP PEERS (CEDGE)"
+  ansible.builtin.script:
+    executable: /usr/bin/python3
+    cmd: >
+      roles/BFD-TLOC-VIPTELA-TRIAGE/tasks/bfd_ssh.py
+      '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}", "password": "{{ ansible_password }}", "device_type": "cisco_ios", "commands": ["show sdwan omp peers", "show sdwan omp tlocs"]}'
+  register: omp_raw_cedge
+  when: platform == 'cedge'
+  delegate_to: localhost
+  no_log: true
+  ignore_errors: true
+
+- name: "1113 PARSE OMP OUTPUT (VEDGE)"
+  set_fact:
+    omp_parsed_vedge: "{{ omp_raw_vedge.stdout | from_json }}"
+  when: platform == 'vedge' and omp_raw_vedge.stdout is defined
+  ignore_errors: true
+
+- name: "1113B PARSE OMP OUTPUT (CEDGE)"
+  set_fact:
+    omp_parsed_cedge: "{{ omp_raw_cedge.stdout | from_json }}"
+  when: platform == 'cedge' and omp_raw_cedge.stdout is defined
+  ignore_errors: true
+
+- name: "1114 NORMALIZE OMP OUTPUT"
+  set_fact:
+    omp_raw_output: "{{ (omp_parsed_vedge.output | default({})) if platform == 'vedge' else (omp_parsed_cedge.output | default({})) }}"
+
+- name: "1115 COUNT DOWN BFD SESSIONS"
+  set_fact:
+    bfd_down_sessions: "{{ bfd_sessions | default([]) | selectattr('state', 'ne', 'up') | list }}"
+
+- name: "1116 SET BFD SCOPE — SESSIONS EXIST"
+  set_fact:
+    bfd_scope: "{{ 'all' if (bfd_down_sessions | length) == (bfd_sessions | length) else 'single' }}"
+  when: bfd_sessions | default([]) | length > 0
+
+- name: "1116A SET BFD SCOPE — ZERO SESSIONS CONTROL UP"
+  set_fact:
+    bfd_scope: "all"
+  when:
+    - bfd_sessions | default([]) | length == 0
+    - control_tloc_up | default(false) | bool
+
+- name: "1116B SET BFD SCOPE — ZERO SESSIONS CONTROL DOWN"
+  set_fact:
+    bfd_scope: "control_down"
+  when:
+    - bfd_sessions | default([]) | length == 0
+    - not (control_tloc_up | default(false) | bool)
+
+- name: "1116C-1 PARSE OMP PEERS FROM RAW OUTPUT"
+  set_fact:
+    omp_peers: "{{ omp_raw_output | parse_omp_peers }}"
+
+- name: "1116C-2 SET OMP PEER COUNTS"
+  set_fact:
+    omp_peers_up: "{{ omp_peers.up | default([]) | length }}"
+    omp_peers_down: "{{ omp_peers.down | default([]) | length }}"
+
+- name: "1116D WARN — OMP PEER DATA UNAVAILABLE"
+  block:
+    - debug:
+        msg: >
+          OMP PEER DATA UNAVAILABLE for {{ MgmtIP }}: omp_raw_output empty or parse returned no peers.
+          NOC: SSH to device and run 'show omp peers' (vedge) or 'show sdwan omp peers' (cedge).
+    - lineinfile:
+        path: "{{ output_file }}"
+        line: |
+          WARNING [OMP STATE]: No OMP peer data retrieved.
+            Cause: SSH bundle returned empty or filter parse returned no peers.
+            NOC: Run 'show omp peers' / 'show sdwan omp peers' on device.
+      delegate_to: localhost
+  when: omp_raw_output | default({}) | length == 0
+  rescue:
+    - set_fact:
+        omp_peers: {up: [], down: []}
+    - lineinfile:
+        path: "{{ output_file }}"
+        line: "ERROR [OMP PARSE]: Filter exception. NOC: manual investigation."
+      delegate_to: localhost
+    - ansible.builtin.meta: clear_host_errors

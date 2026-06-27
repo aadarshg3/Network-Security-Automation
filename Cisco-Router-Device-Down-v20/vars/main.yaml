@@ -1,0 +1,51 @@
+---
+# Cisco-Router-Device-Down — run-level safety posture
+# read_only_mode: true  → suppress ALL destructive actions (WAN bounce, BGP clear,
+#                         config write). This is the SAFE DEFAULT for production.
+# read_only_mode: false → automation may act when confidence thresholds are met.
+#
+# Destructive actions require BOTH gates to be armed:
+#   run_primary_remediation = true  (the remediation tree is enabled)  AND
+#   read_only_mode          = false (destructive actions permitted)
+# In lab_mode both are armed automatically so the full remediation tree
+# (WAN bounce, BGP clear, routing) runs for SIT testing. In production
+# (lab_mode=false) read_only_mode stays true and remediation stays gated off.
+# read_only_mode is owned here; run_primary_remediation is set in tasks/main.yaml
+# (set_fact) which takes precedence — both derive from lab_mode identically.
+read_only_mode: "{{ false if (lab_mode | bool) else true }}"
+
+# Minimum WAN confidence to attempt bounce (high = 2+ signals must agree)
+wan_bounce_min_confidence: "high"
+
+# SSH connection parameters
+ssh_conn_timeout: 30
+ssh_cmd_timeout:  60
+
+# Lab/SIT toggle. Default false (production). When lab_mode=true is passed as an
+# extra-var, the jump uses the local lab account below instead of TACACS/cinfo.
+# Never enable in production — the chain falls back to TACACS+cinfo when false.
+lab_mode: true
+lab_jump_user: "cisco"
+lab_jump_password: "cisco"
+
+# Effective jump overrides: the lab account when lab_mode is on, otherwise empty
+# (empty -> jump_ssh.py uses the TACACS/cinfo device_password_chain).
+jump_user_override: "{{ lab_jump_user if (lab_mode | bool) else '' }}"
+jump_password_override: "{{ lab_jump_password if (lab_mode | bool) else '' }}"
+
+# Device credential chain is assembled at runtime in main.yaml (task 1003) from
+# TACACS (ansible_password) first, then the cinfo indices in CinfoCredentials,
+# matching the BGP-Router-Up-Down and Cisco-Switch-Down credential pattern.
+
+# BGP clear safety: only clear neighbors in these states (never touch Established)
+bgp_clearable_states:
+  - Idle
+  - Active
+  - Connect
+  - OpenSent
+  - OpenConfirm
+
+# Ping parameters
+ping_count: 5
+ping_timeout_per_packet: 5
+

@@ -1,0 +1,100 @@
+---
+# Cisco-Router-Device-Down — Reachable Close-Out (MOP "Ping = YES" leaf)
+#
+# MOP: if the primary router pings from the iAutomate/domain server, the device
+# is UP. The Device-Down condition is already false. Collect the validation
+# command set, write it to the ticket, and let closure mark success + AVA tag.
+# NO WAN bounce, NO PE derivation, NO BGP clear — those belong only to the
+# unreachable -> secondary-jump path.
+#
+# Platform-aware (IOS/IOS-XE vs IOS-XR). Runs only when primary_reachable.
+
+- block:
+
+    - name: 1150 SET PLATFORM-AWARE CLOSE-OUT COMMANDS
+      ansible.builtin.set_fact:
+        # Light read-only confirm set: prove the device is up (uptime + last-reload
+        # reason via show version) and record reload evidence. Flap detection is
+        # owned by the internal HANK mechanism, not this playbook. Both commands
+        # are valid on IOS, IOS-XE and IOS-XR.
+        # MOP "ping = YES" command set (explicit per MOP document):
+        #   show version, show logging | i reload, show ip bgp summary,
+        #   show environment all — plus operational additions.
+        closeout_commands:
+          - "show version"
+          - "show logging | include reload"
+          - "show ip bgp summary"
+          - "show environment all"
+          - "show ip interface brief"
+          - "show ip route"
+
+    - name: 1151 GATHER CLOSE-OUT VALIDATION COMMANDS
+      ansible.builtin.script: >
+        tasks/device_ssh.py
+        'platform={{ detected_platform | default('ios') }}'
+        '{{ MgmtIP }}'
+        '{{ ansible_user }}'
+        '{{ ansible_password }}'
+        '{{ closeout_commands | to_json }}'
+      args:
+        executable: python3
+      register: closeout_raw
+      no_log: true
+      delegate_to: localhost
+
+    - name: 1152 PARSE CLOSE-OUT OUTPUT
+      ansible.builtin.set_fact:
+        closeout_parsed: "{{ closeout_raw.stdout | safe_json_parse }}"
+
+    - name: 1153 WRITE CLOSE-OUT VALIDATION TO OUTPUT
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          DEVICE REACHABLE — VALIDATION & CLOSE (per MOP)
+          ============================================================
+          Primary {{ MgmtIP }} responds to ICMP from the iAutomate/domain server.
+          Device is UP. The Device-Down alarm is a false positive or has already
+          recovered. Per MOP, validation logs are collected and the incident is
+          closed. No WAN bounce, PE check, or BGP clear is performed on an
+          already-reachable device.
+
+          SSH for validation logs: {{ 'SUCCESS' if closeout_parsed.success | default(false) else 'FAILED — ICMP up but SSH did not succeed; logs may be partial' }}
+
+          {% for cmd in closeout_commands %}
+          ============================================================
+          {{ cmd }}
+          ============================================================
+          {{ (closeout_parsed.outputs | default({})).get(cmd, '(no output)') }}
+
+          {% endfor %}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    - name: 1154 MARK REACHABLE CLOSE-OUT PHASE OK
+      ansible.builtin.set_fact:
+        reachable_closeout_done: true
+        phase_results: "{{ phase_results | combine({'reachable_closeout': 'ok'}) }}"
+
+  rescue:
+    - name: 1150R REACHABLE CLOSE-OUT RESCUE
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          DEVICE REACHABLE — VALIDATION (partial)
+          ============================================================
+          Primary {{ MgmtIP }} is reachable (ICMP up), but collecting the
+          validation command set hit an error. Device is UP; closing per MOP.
+          Validation logs may be incomplete — see Jenkins log if needed.
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    - name: 1150R SET CLOSE-OUT PARTIAL
+      ansible.builtin.set_fact:
+        reachable_closeout_done: true
+        phase_results: "{{ phase_results | combine({'reachable_closeout': 'partial'}) }}"

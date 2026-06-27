@@ -1,0 +1,58 @@
+---
+# Cisco-Router-Device-Down — Pre-remediation config snapshot (baseline).
+# Uses the secondary->primary jump for all primary SSH.
+# against MgmtIP, because MgmtIP is unreachable on the remediation path.
+
+- block:
+
+    - name: 1350 GATHER PRE-REMEDIATION BASELINE VIA JUMP
+      ansible.builtin.script: >
+        tasks/jump_ssh.py
+        'secondary_hostname={{ secondary_hostname | default(partner_neid) | default('') }}'
+        'platform={{ detected_platform | default("ios") }}'
+        'jump_password_override={{ jump_password_override | default('') }}'
+        'jump_user_override={{ jump_user_override | default('') }}'
+        '{{ partner_ip }}'
+        '{{ ansible_user }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ primary_lan_ip }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ ["show running-config"] | to_json }}'
+      args:
+        executable: python3
+      register: pre_snapshot_raw
+      no_log: true
+      delegate_to: localhost
+
+    - name: 1352 PARSE PRE-SNAPSHOT OUTPUT
+      ansible.builtin.set_fact:
+        pre_snapshot_parsed: "{{ pre_snapshot_raw.stdout | safe_json_parse }}"
+
+    - name: 1353 EXTRACT PRE-REMEDIATION RUNNING-CONFIG
+      ansible.builtin.set_fact:
+        pre_running_config:   "{{ (pre_snapshot_parsed.outputs | default({})).get('show running-config', '') }}"
+        pre_snapshot_success: "{{ pre_snapshot_parsed.success | default(false) | bool }}"
+
+    - name: 1354 MARK PRE-CONFIG SNAPSHOT PHASE OK
+      ansible.builtin.set_fact:
+        phase_results: "{{ phase_results | combine({'pre_config_snapshot': 'ok'}) }}"
+
+  rescue:
+    - name: 1350R PRE-SNAPSHOT RESCUE LOG
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          [CONFIG BASELINE] Pre-remediation running-config could not be captured
+          (jump SSH to primary via {{ primary_lan_ip }} failed).
+          Config-change diff will be unavailable. Automation continues.
+        insertafter: EOF
+        create: true
+      delegate_to: localhost
+      ignore_errors: true
+
+    - name: 1350R SET SNAPSHOT FAILED
+      ansible.builtin.set_fact:
+        pre_snapshot_success: false
+        pre_running_config:   ""
+        phase_results: "{{ phase_results | combine({'pre_config_snapshot': 'failed'}) }}"

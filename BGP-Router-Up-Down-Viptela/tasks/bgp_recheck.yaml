@@ -1,0 +1,115 @@
+---
+# v9 fixes applied:
+# - Bug: Jinja2 default(\"0\") in both cEdge and vEdge recheck tasks → default('0')
+# - Bug: 'show bgp vpn X summary' is invalid on vEdge 20.x → removed, keep 'show bgp summary' only
+# - Bug: task 1083B parsed wrong key ('show bgp vpn X summary') → now uses 'show bgp summary'
+# - Bug: enable_password in cEdge recheck was fragile CinfoCredentials parse → simplified to ansible_password
+
+- name: "1081 RECHECK BGP STATE — CEDGE"
+  ansible.builtin.script:
+    executable: /usr/bin/python3
+    cmd: >
+      roles/BGP-Router-Up-Down-Viptela/tasks/bgp_ssh.py
+      '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}",
+        "password": "{{ ansible_password }}", "device_type": "cisco_ios",
+        "commands": [
+          "show ip bgp neighbors | include BGP",
+          "show ip bgp vpnv4 vrf {{ vpn_id | default('0') }} neighbors | include BGP"
+        ]}'
+  register: bgp_recheck_raw_cedge
+  when: platform == 'cedge' or platform == ''
+  delegate_to: localhost
+  no_log: true
+  ignore_errors: true
+
+- name: "1081B PARSE CEDGE RECHECK"
+  set_fact:
+    bgp_recheck_cedge: "{{ bgp_recheck_raw_cedge.stdout | from_json }}"
+  when: >
+    (platform == 'cedge' or platform == '') and
+    bgp_recheck_raw_cedge is defined and
+    bgp_recheck_raw_cedge.failed == false and
+    bgp_recheck_raw_cedge.stdout is defined
+
+# v9 FIX: only 'show bgp summary' — 'show bgp vpn X summary' is invalid on vEdge 20.x
+# Confirmed build 1372 syntax error; build 1374 recheck SSH failed because of this command
+- name: "1082 RECHECK BGP STATE — VEDGE"
+  ansible.builtin.script:
+    executable: /usr/bin/python3
+    cmd: >
+      roles/BGP-Router-Up-Down-Viptela/tasks/bgp_ssh.py
+      '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}",
+        "password": "{{ ansible_password }}", "device_type": "cisco_ios",
+        "commands": ["show bgp summary"]}'
+  register: bgp_recheck_raw_vedge
+  when: platform == 'vedge'
+  delegate_to: localhost
+  no_log: true
+  ignore_errors: true
+
+- name: "1082B PARSE VEDGE RECHECK"
+  set_fact:
+    bgp_recheck_vedge: "{{ bgp_recheck_raw_vedge.stdout | from_json }}"
+  when: >
+    platform == 'vedge' and
+    bgp_recheck_raw_vedge is defined and
+    bgp_recheck_raw_vedge.failed == false and
+    bgp_recheck_raw_vedge.stdout is defined
+
+- name: "1083 PARSE RECHECK BGP STATE — CEDGE"
+  set_fact:
+    bgp_recheck_neighbors: >
+      {{
+        (bgp_recheck_cedge.output | default({})).get(
+          'show ip bgp vpnv4 vrf ' + (vpn_id | default('0')) + ' neighbors | include BGP'
+          if vpn_id | default('0') not in ['0', '']
+          else 'show ip bgp neighbors | include BGP',
+          ''
+        ) | parse_bgp_state_cedge
+      }}
+  when: (platform == 'cedge' or platform == '') and bgp_recheck_cedge is defined
+
+# v9 FIX: key is always 'show bgp summary' — VPN-specific key removed from bundle
+- name: "1083B PARSE RECHECK BGP STATE — VEDGE"
+  set_fact:
+    bgp_recheck_neighbors: >
+      {{
+        (bgp_recheck_vedge.output | default({}))
+        .get('show bgp summary', '')
+        | parse_bgp_state_vedge(vpn_id | default('0'))
+      }}
+  when: platform == 'vedge' and bgp_recheck_vedge is defined
+
+- name: "1083C DEFAULT RECHECK NEIGHBORS IF SSH FAILED"
+  set_fact:
+    bgp_recheck_neighbors: []
+  when: bgp_recheck_neighbors is not defined
+
+- debug:
+    msg: >
+      BGP recheck: {{ bgp_recheck_neighbors | length }} neighbor(s) found.
+      Recovered: {{ bgp_recheck_neighbors | length > 0 and
+        (bgp_recheck_neighbors | get_stuck_neighbors) | length == 0 }}
+
+- name: "1084 SET BGP RECOVERED FLAG"
+  set_fact:
+    bgp_recovered: >
+      {{
+        bgp_recheck_neighbors | length > 0 and
+        (bgp_recheck_neighbors | get_stuck_neighbors) | length == 0
+      }}
+
+- name: "1084B SET CLOSURE READY IF BGP RECOVERED"
+  set_fact:
+    closure_ready: true
+  when: bgp_recovered | bool
+
+- name: "1084D WRITE RECHECK RESULT"
+  lineinfile:
+    path: "{{ output_file }}"
+    line: |
+      BGP Re-check After Remediation:
+        - Neighbors checked  : {{ bgp_recheck_neighbors | default([]) | length }}
+        - Stuck remaining    : {{ (bgp_recheck_neighbors | default([]) | get_stuck_neighbors) | length }}
+        - BGP Status         : {{ 'ESTABLISHED — proceeding to alarm clearance' if bgp_recovered | bool else 'STILL DOWN — proceeding to interface check' }}
+  delegate_to: localhost

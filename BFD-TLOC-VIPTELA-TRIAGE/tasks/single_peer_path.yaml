@@ -1,0 +1,54 @@
+---
+- name: "1121 RUN TUNNEL AND IPSEC COMMANDS (VEDGE)"
+  ansible.builtin.script:
+    executable: /usr/bin/python3
+    cmd: >
+      roles/BFD-TLOC-VIPTELA-TRIAGE/tasks/bfd_ssh.py
+      '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}", "password": "{{ ansible_password }}", "device_type": "cisco_ios", "commands": ["show tunnel connections", "show tunnel statistics", "show bfd sessions", "show policy data-policy-filter"]}'
+  register: tunnel_raw_vedge
+  when: platform == 'vedge'
+  delegate_to: localhost
+  no_log: true
+  ignore_errors: true
+
+- name: "1122 RUN TUNNEL AND IPSEC COMMANDS (CEDGE)"
+  ansible.builtin.script:
+    executable: /usr/bin/python3
+    cmd: >
+      roles/BFD-TLOC-VIPTELA-TRIAGE/tasks/bfd_ssh.py
+      '{"host": "{{ MgmtIP }}", "username": "{{ ansible_user }}", "password": "{{ ansible_password }}", "device_type": "cisco_ios", "commands": ["show sdwan tunnel statistics", "show sdwan tunnel statistics table", "show sdwan ipsec sa", "show sdwan tunnels", "show sdwan bfd sessions", "show sdwan policy data-policy-filter"]}'
+  register: tunnel_raw_cedge
+  when: platform == 'cedge'
+  delegate_to: localhost
+  no_log: true
+  ignore_errors: true
+
+- name: "1123 PARSE TUNNEL OUTPUT (VEDGE)"
+  set_fact:
+    tunnel_parsed_vedge: "{{ tunnel_raw_vedge.stdout | from_json }}"
+  when: platform == 'vedge' and tunnel_raw_vedge.stdout is defined
+  ignore_errors: true
+
+- name: "1123B PARSE TUNNEL OUTPUT (CEDGE)"
+  set_fact:
+    tunnel_parsed_cedge: "{{ tunnel_raw_cedge.stdout | from_json }}"
+  when: platform == 'cedge' and tunnel_raw_cedge.stdout is defined
+  ignore_errors: true
+
+- name: "1124 NORMALIZE TUNNEL OUTPUT"
+  set_fact:
+    tunnel_raw_output: "{{ (tunnel_parsed_vedge.output | default({})) if platform == 'vedge' else (tunnel_parsed_cedge.output | default({})) }}"
+
+- name: "1125 SET TIER 2 ESCALATION FOR SINGLE PEER DOWN"
+  set_fact:
+    escalate_tier2: true
+  when: not (bfd_confirmed_up | default(false) | bool)
+
+- name: "1126 WRITE SINGLE PEER PATH DATA TO OUTPUT"
+  lineinfile:
+    path: "{{ output_file }}"
+    line: |
+      Single Peer Path Diagnostics Collected:
+        - Tunnel and IPsec data captured for TLOC {{ tloc_color }}
+        - Refer to Tier 2 team for cross-customer remote endpoint investigation
+  delegate_to: localhost

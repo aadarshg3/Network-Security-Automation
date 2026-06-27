@@ -1,0 +1,138 @@
+---
+- name: "1180 WRITE COMPLETE FORMATTED REPORT TO OUTPUT.DAT"
+  copy:
+    dest: "{{ output_file }}"
+    content: |
+      parsedevices=true
+      {{ domain | default(DNSEntityName) }}#{{ DNSEntityName }}#Success# SELECTED PLAYBOOK: BFD-TLOC-VIPTELA-TRIAGE
+
+      ================================================================
+                        AUTOMATION TRIAGE REPORT
+      ================================================================
+      Playbook         : BFD-TLOC-VIPTELA-TRIAGE
+      Hostname         : {{ entityHostName | default(DNSEntityName) }}
+      IP Address       : {{ MgmtIP }}
+      NEID             : {{ DNSEntityName }}
+      Platform         : {{ platform | upper | default('UNKNOWN') }}
+      Alarm Start Time : {{ incidentStartTime | default('N/A') }}
+      Run Date/Time    : {{ runDateTime | default('N/A') }} UTC
+      ----------------------------------------------------------------
+      Incident Type    : {{ incidentType | default('N/A') }}
+      TLOC Color       : {{ tloc_color | default('N/A') }}
+      Alarm Text       : {{ alarm_text | default('N/A') }}
+      ================================================================
+
+      [1] CONNECTIVITY CHECK
+      ----------------------------------------------------------------
+      Ping to {{ MgmtIP }}  : {{ '0% packet loss — OK' if (packetLoss | default('100') | int) == 0 else (packetLoss | default('N/A') | string) + '% packet loss — FAILED' }}
+      SSH to {{ MgmtIP }}   : {{ 'Successful' if ssh_ok | default(false) | bool else 'FAILED' }}
+
+      [2] PLATFORM DETECTION
+      ----------------------------------------------------------------
+      Platform   : {{ platform | upper | default('UNKNOWN') }}
+      Type       : {{ 'cEdge (IOS-XE SD-WAN)' if platform | default('') == 'cedge' else 'vEdge (Viptela OS)' if platform | default('') == 'vedge' else 'Unknown — defaulted from inventory' }}
+
+      [3] VMANAGE DISCOVERY AND AUTHENTICATION
+      ----------------------------------------------------------------
+      Customer   : {{ shortname | default('N/A') }}
+      vManage IP : {{ vmanage_ip | default('Not found') }}
+      Auth Status: {{ 'Authenticated successfully' if vmanage_authenticated | default(false) | bool else 'Authentication failed or vManage not found' }}
+
+      [4] BFD SESSION CHECK (TLOC: {{ tloc_color | default('N/A') }})
+      ----------------------------------------------------------------
+      {% if bfd_not_configured | default(false) | bool %}
+      BFD Status  : NOT CONFIGURED on this device for TLOC {{ tloc_color | default('') }}
+      {% else %}
+      Total Sessions : {{ bfd_sessions | default([]) | length }}
+      Sessions UP    : {{ bfd_sessions | default([]) | selectattr('state', 'equalto', 'up') | list | length }}
+      Sessions DOWN  : {{ bfd_sessions | default([]) | selectattr('state', 'ne', 'up') | list | length }}
+      BFD State      : {{ 'UP' if bfd_up | default(false) | bool else 'DOWN' }}
+      {% endif %}
+
+      [5] CONTROL TLOC CHECK
+      ----------------------------------------------------------------
+      Control State   : {{ 'UP' if control_tloc_up | default(false) | bool else 'DOWN' }}
+      UP Connections  : {{ control_connections.up | default([]) | length }}
+      DOWN Connections: {{ control_connections.down | default([]) | length }}
+      {% if not (control_tloc_up | default(false) | bool) %}
+      Action          : CONTROL TLOC IS DOWN — Refer to Control TLOC Down MOP.
+      Note            : When control is down, BFD cannot establish sessions. This may be the root cause.
+      {% endif %}
+
+      [6] INTERFACE AND TLOC TERMINATION CHECK
+      ----------------------------------------------------------------
+      Interface Name : {{ interface_status.name | default('Not determined') }}
+      Interface State: {{ interface_status.state | default('Unknown') }}
+      TLOC Local     : {{ 'Yes — TLOC terminates on this device' if tloc_local | default(false) | bool else 'No — TLOC extension (check redundant router)' }}
+
+      [7] REDUNDANT ROUTER CHECK
+      ----------------------------------------------------------------
+      Redundant IP   : {{ redundant_router_ip | default('Not found — manual action required') }}
+
+      [8] BFD SCOPE ANALYSIS
+      ----------------------------------------------------------------
+      Total Sessions : {{ bfd_sessions | default([]) | length }}
+      Down Sessions  : {{ bfd_down_sessions | default([]) | length }}
+      Scope          : {{ 'ALL PEERS DOWN' if bfd_scope | default('') == 'all' else 'SINGLE PEER DOWN' if bfd_scope | default('') == 'single' else 'CONTROL PLANE DOWN — BFD CANNOT ESTABLISH' if bfd_scope | default('') == 'control_down' else 'N/A' }}
+      OMP Peers UP   : {{ omp_peers_up | default('N/A') }}
+      OMP Peers DOWN : {{ omp_peers_down | default('N/A') }}
+
+      {% if bfd_up | default(false) | bool %}
+      [9] BFD RESOLUTION — SESSION UP
+      ----------------------------------------------------------------
+      BFD TLOC {{ tloc_color | default('') }} is UP and stable.
+      Flapping       : {{ 'YES — Tier 2 investigation required' if bfd_flapping | default(false) | bool else 'No — Stable' }}
+      vManage Alarms : {{ vmanage_alarm_uuids | default([]) | length }} alarm(s) cleared
+      {% endif %}
+
+      {% if remediation_attempted | default(false) | bool %}
+      [9] INTERFACE REMEDIATION
+      ----------------------------------------------------------------
+      Template Managed : {{ 'YES — Manual action required (see notes below)' if template_managed | default(false) | bool else 'No' }}
+      CLI Bounce       : {{ 'Not executed — device is template managed' if template_managed | default(false) | bool else 'Executed — shut/no-shut applied' }}
+      BFD After Bounce : {{ 'UP — Resolved' if bfd_confirmed_up | default(false) | bool else 'Still DOWN — escalating to Tier 2' }}
+      {% if template_managed | default(false) | bool %}
+      NOTE: Device is managed by vManage template.
+            Manual steps: 1) Detach from template in vManage
+                          2) Bounce interface via CLI
+                          3) Re-attach template in vManage
+                          4) Verify BFD sessions
+      {% endif %}
+      {% endif %}
+
+      {% if escalate_tier2 | default(false) | bool %}
+      [10] TIER 2 ESCALATION
+      ----------------------------------------------------------------
+      BFD TLOC {{ tloc_color | default('') }} could not be auto-resolved.
+      Diagnostic bundle collected.
+      Recommended checks: OMP, IPsec, NTP/Clock, NAT, Firewall (UDP 12346/12366), MTU.
+      Action: Assign to Tier 2 team for manual investigation.
+      {% endif %}
+
+      {% if closure_ready | default(false) | bool %}
+      [10] RESOLUTION
+      ----------------------------------------------------------------
+      BFD TLOC {{ tloc_color | default('') }} is UP and stable on {{ DNSEntityName }}.
+      vManage alarms cleared where applicable.
+      Ticket assigned to L1 NOC team for closure.
+      {% endif %}
+
+      ================================================================
+      ETMS NOTES
+      ================================================================
+      - Check if a Control TLOC Down ticket exists for {{ DNSEntityName }}.
+        If yes, link tickets manually in ETMS.
+
+      ================================================================
+      Next Plan of Action:
+        - If the alarm clears, AVA will be triggered below.
+        - If the alarm does not clear, NOC to manually check and notify the customer.
+      ================================================================
+  delegate_to: localhost
+
+- name: "1181 WRITE AVA CLOSURE TAG"
+  lineinfile:
+    path: "{{ output_file }}"
+    insertafter: EOF
+    line: "Post\u2011Test Validation: Verified Services UP"
+  delegate_to: localhost

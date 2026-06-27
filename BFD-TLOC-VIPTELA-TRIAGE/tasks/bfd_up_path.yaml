@@ -1,0 +1,16 @@
+---
+- name: "1071 CHECK BFD FLAPPING FROM HISTORY (WINDOW 60 MINUTES)"
+  set_fact:
+    bfd_flapping: "{{ bfd_history | is_flapping(60) }}"
+
+- name: "1073 SET TIER 2 ESCALATION FOR FLAPPING"
+  set_fact:
+    escalate_tier2: true
+  when: bfd_flapping | bool
+
+- name: "1075 SET CLOSURE FLAG BFD STABLE"
+  set_fact:
+    bfd_confirmed_up: true
+    closure_ready: true
+    escalate_tier2: false
+  when: not (bfd_flapping | bool)

@@ -1,0 +1,459 @@
+---
+# Cisco-Router-Device-Down — WAN interface identification + conditional bounce.
+# All SSH to the primary goes through the secondary->primary jump.
+# because MgmtIP is unreachable on the secondary-jump remediation path.
+# Post-bounce re-ping still uses ping.py from the iAutomate host (correct —
+# that confirms MgmtIP is reachable from the management plane again).
+
+- block:
+
+    - name: 1399 SET PLATFORM-AWARE WAN COMMANDS
+      ansible.builtin.set_fact:
+        wan_cmd_route:    "{{ 'show route ipv4 static' if detected_platform == 'ios_xr' else 'show ip route static' }}"
+        wan_cmd_bgp:      "{{ 'show bgp summary' if detected_platform == 'ios_xr' else 'show ip bgp summary' }}"
+        wan_cmd_intbrief: "{{ 'show ipv4 interface brief' if detected_platform == 'ios_xr' else 'show ip interface brief' }}"
+        wan_cmd_desc:     "show interfaces description"
+        wan_cmd_running:  "show running-config"
+
+    - name: 1400 GATHER WAN IDENTIFICATION COMMANDS (via jump)
+      ansible.builtin.script: >
+        tasks/jump_ssh.py
+        'secondary_hostname={{ secondary_hostname | default(partner_neid) | default('') }}'
+        'platform={{ detected_platform | default("ios") }}'
+        'jump_password_override={{ jump_password_override | default('') }}'
+        'jump_user_override={{ jump_user_override | default('') }}'
+        '{{ partner_ip }}'
+        '{{ ansible_user }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ primary_lan_ip }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ [wan_cmd_route, wan_cmd_running, wan_cmd_bgp, wan_cmd_desc, wan_cmd_intbrief] | to_json }}'
+      args:
+        executable: python3
+      register: wan_id_raw
+      no_log: true
+      delegate_to: localhost
+
+    - name: 1401 PARSE WAN IDENTIFICATION OUTPUT
+      ansible.builtin.set_fact:
+        wan_id_parsed: "{{ wan_id_raw.stdout | safe_json_parse }}"
+
+    - name: 1402 EXTRACT WAN ID INPUT TEXTS
+      ansible.builtin.set_fact:
+        wan_show_route:    "{{ wan_id_parsed.outputs.get(wan_cmd_route, '') }}"
+        wan_show_running:  "{{ wan_id_parsed.outputs.get(wan_cmd_running, '') }}"
+        wan_bgp_summary:   "{{ wan_id_parsed.outputs.get(wan_cmd_bgp, '') }}"
+        wan_show_int_desc: "{{ wan_id_parsed.outputs.get(wan_cmd_desc, '') }}"
+        wan_show_int_brief: "{{ wan_id_parsed.outputs.get(wan_cmd_intbrief, '') }}"
+
+    - name: 1403 PARSE BGP NEIGHBORS FOR WAN ID
+      ansible.builtin.set_fact:
+        wan_bgp_neighbors: "{{ wan_bgp_summary | default('') }}"
+
+    - name: 1404 DERIVE WAN INTERFACE WITH CONFIDENCE (3-SIGNAL)
+      ansible.builtin.set_fact:
+        wan_result: >-
+          {{
+            wan_show_route
+            | derive_wan_interface_with_confidence(
+                wan_show_running,
+                wan_bgp_neighbors,
+                wan_show_int_desc,
+                wan_show_int_brief
+              )
+          }}
+
+    - name: 1405 SET WAN INTERFACE FACTS
+      ansible.builtin.set_fact:
+        wan_interface:  "{{ wan_result.interface }}"
+        wan_confidence: "{{ wan_result.confidence }}"
+        wan_signals:    "{{ wan_result.signals }}"
+        static_default_next_hop: "{{ wan_show_route | parse_static_default_next_hop }}"
+
+    - name: 1406 LOG WAN IDENTIFICATION OUTCOME
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          WAN INTERFACE IDENTIFICATION
+          ============================================================
+          {{ wan_result | format_wan_identification_result }}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    - name: 1407 GET WAN INTERFACE STATE (via jump)
+      ansible.builtin.script: >
+        tasks/jump_ssh.py
+        'secondary_hostname={{ secondary_hostname | default(partner_neid) | default('') }}'
+        'platform={{ detected_platform | default("ios") }}'
+        'jump_password_override={{ jump_password_override | default('') }}'
+        'jump_user_override={{ jump_user_override | default('') }}'
+        '{{ partner_ip }}'
+        '{{ ansible_user }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ primary_lan_ip }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ [wan_cmd_intbrief] | to_json }}'
+      args:
+        executable: python3
+      register: wan_state_raw
+      no_log: true
+      delegate_to: localhost
+      when: wan_interface | length > 0
+
+    - name: 1408 PARSE WAN INTERFACE STATE
+      ansible.builtin.set_fact:
+        wan_int_brief_text: "{{ (wan_state_raw.stdout | safe_json_parse).outputs.get(wan_cmd_intbrief, '') }}"
+        wan_int_state_list: "{{ (wan_state_raw.stdout | safe_json_parse).outputs.get(wan_cmd_intbrief, '') | parse_interface_state(wan_interface) }}"
+      when: wan_interface | length > 0
+
+    - name: 1408A SET WAN STATE FACT
+      ansible.builtin.set_fact:
+        wan_state: "{{ wan_int_state_list[1] | default('unknown') }}"
+        wan_admin_down: "{{ 'administratively down' in (wan_int_state_list[0] | default('') | lower) }}"
+      when: wan_interface | length > 0
+
+    - name: 1408B LOG WAN INTERFACE STATE
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: "WAN interface {{ wan_interface }} — line: {{ wan_int_state_list[0] | default('unknown') }}, protocol: {{ wan_int_state_list[1] | default('unknown') }}"
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when: wan_interface | length > 0
+
+    # Pre-bounce snapshot (read-only, via jump)
+    - name: 1409 PRE-BOUNCE SNAPSHOT (via jump)
+      ansible.builtin.script: >
+        tasks/jump_ssh.py
+        'secondary_hostname={{ secondary_hostname | default(partner_neid) | default('') }}'
+        'platform={{ detected_platform | default("ios") }}'
+        'jump_password_override={{ jump_password_override | default('') }}'
+        'jump_user_override={{ jump_user_override | default('') }}'
+        '{{ partner_ip }}'
+        '{{ ansible_user }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ primary_lan_ip }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ ["show interface " + wan_interface, "show ip interface " + wan_interface] | to_json }}'
+      args:
+        executable: python3
+      register: pre_bounce_snap_raw
+      no_log: true
+      delegate_to: localhost
+      when:
+        - wan_interface | length > 0
+        - wan_confidence == 'high'
+        - wan_state == 'down'
+        - not wan_admin_down | default(false)
+        - not read_only_mode
+
+    - name: 1409A WRITE PRE-BOUNCE SNAPSHOT TO OUTPUT
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          --- PRE-BOUNCE INTERFACE SNAPSHOT ({{ wan_interface }}) ---
+          {{ (pre_bounce_snap_raw.stdout | safe_json_parse).outputs | dict2items | map(attribute='value') | join('\n') }}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when:
+        - wan_interface | length > 0
+        - wan_confidence == 'high'
+        - wan_state == 'down'
+        - not wan_admin_down | default(false)
+        - not read_only_mode
+        - pre_bounce_snap_raw is defined
+
+    - name: 1410 LOG BOUNCE DECISION
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          [WAN BOUNCE] DECISION
+          ============================================================
+          WAN interface     : {{ wan_interface if wan_interface else 'NOT IDENTIFIED' }}
+          ID confidence     : {{ wan_confidence | upper }}
+          Interface state   : {{ wan_state }}{{ ' (administratively down)' if wan_admin_down | default(false) else '' }}
+          read_only_mode    : {{ read_only_mode }}
+          Bounce will run   : {{ 'True' if (wan_interface and wan_confidence == 'high' and wan_state == 'down' and not wan_admin_down | default(false) and not read_only_mode) else 'False' }}
+          Jump session      : secondary={{ partner_ip }} → primary={{ primary_lan_ip }}
+          {% if not (wan_interface and wan_confidence == 'high' and wan_state == 'down' and not wan_admin_down | default(false) and not read_only_mode) %}
+          Reason NOT bounced:
+          {%   if not wan_interface %}
+            - WAN interface could not be identified (confidence: {{ wan_confidence }})
+          {%   elif wan_confidence != 'high' %}
+            - WAN confidence is {{ wan_confidence }} (requires HIGH = 2+ signals in agreement)
+          {%   elif wan_state != 'down' %}
+            - WAN interface protocol state is {{ wan_state }} (not down — no bounce needed)
+          {%   elif wan_admin_down | default(false) %}
+            - WAN interface is ADMINISTRATIVELY DOWN — deliberately disabled; will not re-enable.
+          {%   elif read_only_mode %}
+            - read_only_mode is True (destructive actions suppressed)
+          {%   endif %}
+          {% endif %}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    - name: 1410B LOG WAN STATUS FOR NOC (WHEN NOT BOUNCING)
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          {% if not wan_interface %}
+          ============================================================
+          [WAN INTERFACE] NOT IDENTIFIED — AUTOMATION DID NOT BOUNCE
+          ============================================================
+          Confidence too low to act. Run these manually on the primary:
+            show ip interface brief
+            show interfaces description
+            show ip route static
+          {% elif wan_state != 'down' %}
+          ============================================================
+          [WAN INTERFACE] {{ wan_interface }} STATE: {{ wan_state | upper }} — NO BOUNCE NEEDED
+          ============================================================
+          WAN interface is {{ wan_state }}. No action required on this path.
+          Automation requires HIGH confidence (2+ agreeing signals) to bounce.
+          {% endif %}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when: not (wan_interface and wan_confidence == 'high' and wan_state == 'down' and not read_only_mode)
+
+    # Bounce is issued through the secondary jump, not the unreachable MgmtIP.
+    # Bouncing via the management path (MgmtIP over WAN) would self-isolate the
+    # device: 'shutdown' drops the session and 'no shutdown' never arrives.
+    # The jump session (secondary → primary via LAN/VRRP IP) survives the WAN bounce.
+    - name: 1411 BOUNCE WAN INTERFACE (IOS / IOS-XE via jump)
+      ansible.builtin.script: >
+        tasks/jump_ssh.py
+        'secondary_hostname={{ secondary_hostname | default(partner_neid) | default('') }}'
+        'platform={{ detected_platform | default("ios") }}'
+        'jump_password_override={{ jump_password_override | default('') }}'
+        'jump_user_override={{ jump_user_override | default('') }}'
+        '{{ partner_ip }}'
+        '{{ ansible_user }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ primary_lan_ip }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ [] | to_json }}'
+        '{{ {"command": "show interface " + wan_interface + " | include line protocol", "must_contain": "line protocol is down"} | to_json }}'
+        '{{ ["configure terminal", "interface " + wan_interface, "shutdown", "no shutdown", "end"] | to_json }}'
+      args:
+        executable: python3
+      register: bounce_raw
+      no_log: true
+      delegate_to: localhost
+      when:
+        - wan_interface | length > 0
+        - wan_confidence == 'high'
+        - wan_state == 'down'
+        - not wan_admin_down | default(false)
+        - detected_platform in ['ios', 'ios_xe']
+        - not read_only_mode
+
+    - name: 1412 BOUNCE WAN INTERFACE (IOS-XR via jump — commit required)
+      ansible.builtin.script: >
+        tasks/jump_ssh.py
+        'secondary_hostname={{ secondary_hostname | default(partner_neid) | default('') }}'
+        'platform={{ detected_platform | default("ios") }}'
+        'jump_password_override={{ jump_password_override | default('') }}'
+        'jump_user_override={{ jump_user_override | default('') }}'
+        '{{ partner_ip }}'
+        '{{ ansible_user }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ primary_lan_ip }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ [] | to_json }}'
+        '{{ {"command": "show interface " + wan_interface + " | include line protocol", "must_contain": "line protocol is down"} | to_json }}'
+        '{{ ["configure terminal", "interface " + wan_interface, "shutdown", "no shutdown", "commit", "end"] | to_json }}'
+      args:
+        executable: python3
+      register: bounce_raw
+      no_log: true
+      delegate_to: localhost
+      when:
+        - wan_interface | length > 0
+        - wan_confidence == 'high'
+        - wan_state == 'down'
+        - not wan_admin_down | default(false)
+        - detected_platform == 'ios_xr'
+        - not read_only_mode
+
+    - name: 1413 MARK BOUNCE ATTEMPTED
+      ansible.builtin.set_fact:
+        bounce_attempted: true
+        bounce_raw_parsed: "{{ bounce_raw.stdout | safe_json_parse }}"
+      when:
+        - wan_interface | length > 0
+        - wan_confidence == 'high'
+        - wan_state == 'down'
+        - not wan_admin_down | default(false)
+        - not read_only_mode
+        - bounce_raw is defined
+
+    - name: 1414 DETECT IF BOUNCE WAS ABORTED BY PRE-CHECK GATE
+      ansible.builtin.set_fact:
+        bounce_precheck_aborted: "{{ bounce_raw_parsed | precheck_aborted }}"
+      when: bounce_attempted
+
+    - name: 1415 LOG BOUNCE ABORTED BY PRE-CHECK
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          [WAN BOUNCE] ABORTED BY PRE-CHECK GATE
+          In-session verification showed interface {{ wan_interface }} is no longer Down
+          at the moment automation was about to act. Bounce was NOT executed.
+          Pre-check output: {{ bounce_raw_parsed.outputs.get('_pre_check_gate', 'N/A') }}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when:
+        - bounce_attempted
+        - bounce_precheck_aborted | default(false)
+
+    - name: 1417 LOG BOUNCE EXECUTED
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          [WAN BOUNCE] EXECUTED on {{ wan_interface }} via jump session
+          Config output:
+          {{ bounce_raw_parsed.outputs.get('_config_output', 'N/A') }}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when:
+        - bounce_attempted
+        - not bounce_precheck_aborted | default(false)
+        - bounce_raw_parsed.success | default(false)
+
+    - name: 1418 WAIT FOR INTERFACE TO RECOVER
+      ansible.builtin.pause:
+        seconds: 20
+      when:
+        - bounce_attempted
+        - not bounce_precheck_aborted | default(false)
+        - bounce_raw_parsed.success | default(false)
+
+    # Post-bounce snapshot — verify state from the jump session
+    - name: 1419 POST-BOUNCE SNAPSHOT (via jump)
+      ansible.builtin.script: >
+        tasks/jump_ssh.py
+        'secondary_hostname={{ secondary_hostname | default(partner_neid) | default('') }}'
+        'platform={{ detected_platform | default("ios") }}'
+        'jump_password_override={{ jump_password_override | default('') }}'
+        'jump_user_override={{ jump_user_override | default('') }}'
+        '{{ partner_ip }}'
+        '{{ ansible_user }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ primary_lan_ip }}'
+        '{{ device_password_chain | to_json }}'
+        '{{ ["show interface " + wan_interface, "show ip interface " + wan_interface] | to_json }}'
+      args:
+        executable: python3
+      register: post_bounce_snap_raw
+      no_log: true
+      delegate_to: localhost
+      when:
+        - bounce_attempted
+        - not bounce_precheck_aborted | default(false)
+
+    - name: 1419A WRITE POST-BOUNCE SNAPSHOT TO OUTPUT
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          --- POST-BOUNCE INTERFACE SNAPSHOT ({{ wan_interface }}) ---
+          {{ (post_bounce_snap_raw.stdout | safe_json_parse).outputs | dict2items | map(attribute='value') | join('\n') }}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when:
+        - bounce_attempted
+        - not bounce_precheck_aborted | default(false)
+        - post_bounce_snap_raw is defined
+
+    # MOP: after bounce, re-ping from the iAutomate/domain server (not from
+    # the jump session) to verify the management plane is restored.
+    - name: 1420 RE-PING PRIMARY FROM IAUTOMATE HOST AFTER BOUNCE
+      ansible.builtin.script: >
+        tasks/ping.py
+        '{{ MgmtIP }}'
+        '{{ ping_count | default(5) }}'
+      args:
+        executable: python3
+      register: post_bounce_ping_raw
+      delegate_to: localhost
+      when:
+        - bounce_attempted
+        - not bounce_precheck_aborted | default(false)
+
+    - name: 1421 SET POST-BOUNCE REACHABILITY
+      ansible.builtin.set_fact:
+        post_bounce_reachable: "{{ (post_bounce_ping_raw.stdout | safe_json_parse).packet_loss | int < 100 }}"
+      when:
+        - bounce_attempted
+        - not bounce_precheck_aborted | default(false)
+        - post_bounce_ping_raw is defined
+
+    - name: 1422 LOG POST-BOUNCE RESULT
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          [WAN BOUNCE] POST-BOUNCE REACHABILITY: {{ 'RECOVERED' if post_bounce_reachable else 'STILL UNREACHABLE' }}
+          Loss from iAutomate host: {{ (post_bounce_ping_raw.stdout | safe_json_parse).packet_loss | default(100) }}%
+          {% if post_bounce_reachable %}
+          MOP: device is reachable — automation will close the incident.
+          Routing/BGP analysis is skipped per MOP (bounce-recovery terminal leaf).
+          {% else %}
+          MOP: device still unreachable — continuing to WAN-UP path (PE/routing analysis).
+          {% endif %}
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+      when:
+        - bounce_attempted
+        - post_bounce_ping_raw is defined
+
+    - name: 1423 SET ESCALATION ON BOUNCE FAILURE
+      ansible.builtin.set_fact:
+        escalation_needed: true
+      when:
+        - bounce_attempted
+        - not post_bounce_reachable | default(false)
+
+    - name: 1424 MARK WAN CHECK PHASE OK
+      ansible.builtin.set_fact:
+        phase_results: "{{ phase_results | combine({'wan_check': 'ok'}) }}"
+
+  rescue:
+    - name: 1400R WAN CHECK RESCUE
+      ansible.builtin.lineinfile:
+        path: "{{ iAutomate_INV_WS }}/output.dat"
+        line: |
+
+          ============================================================
+          [WAN CHECK] PHASE FAILED — jump SSH error
+          ============================================================
+          WAN identification commands could not be executed via jump session
+          (secondary={{ partner_ip }} → primary={{ primary_lan_ip }}).
+          WAN interface: NOT IDENTIFIED. Bounce: NOT ATTEMPTED.
+        insertafter: EOF
+        create: false
+      delegate_to: localhost
+
+    - name: 1400R SET WAN CHECK FAILED
+      ansible.builtin.set_fact:
+        wan_interface: ""
+        wan_confidence: "low"
+        bounce_attempted: false
+        phase_results: "{{ phase_results | combine({'wan_check': 'failed'}) }}"
+        escalation_needed: true

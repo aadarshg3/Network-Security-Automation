@@ -1,4 +1,0 @@
-router bgp {{ conf_data[0] }}
-{% for data in conf_data[1] -%}
-neighbor {{ data.neighbor_ip }} remote-as {{ data.remote_as }}
-{% endfor -%}

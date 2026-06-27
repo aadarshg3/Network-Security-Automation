@@ -1,0 +1,302 @@
+---
+- name: "1056 INITIALIZE VMANAGE DISCOVERY STRUCTURES"
+  set_fact:
+    vmanageDiscoveryDict:
+      Name: "Discovery Viptela vManage servers"
+      Status: ""
+      Message: "Task didn't finish execution."
+      VmanageIPs: []
+      PrimaryVmanageIP: ""
+    vmanageAuthDict:
+      Name: "Authentication over API to vManage"
+      Status: ""
+      Message: "Task didn't finish execution."
+  no_log: true
+
+# FIX v5 — ansible_user/ansible_password always first candidate
+# Hint from team: iAutomate service account (HCL_NetBot) may work on vManage
+- name: "1056B INITIALIZE CREDENTIAL LIST WITH ANSIBLE USER FIRST"
+  set_fact:
+    possibleVmanageCredentials:
+      - username: "{{ ansible_user }}"
+        password: "{{ ansible_password }}"
+  no_log: true
+
+# FIX v5 — APPEND cinfo types after, never replace ansible_user entry
+- name: "1057 APPEND ALL CINFO CREDENTIALS TO CANDIDATE LIST"
+  set_fact:
+    possibleVmanageCredentials: >
+      {{
+        possibleVmanageCredentials +
+        (credentials | dict2items
+         | map(attribute='value')
+         | flatten
+         | selectattr('username', 'defined')
+         | selectattr('password', 'defined')
+         | selectattr('username', 'ne', '')
+         | selectattr('password', 'ne', '')
+         | list)
+      }}
+  no_log: true
+  when: credentials is defined and credentials | dict2items | length > 0
+
+- debug:
+    msg: >
+      Credential candidates: {{ possibleVmanageCredentials | length }} total
+      (ansible_user first, then {{ (possibleVmanageCredentials | length) - 1 }} cinfo type(s))
+
+- name: "1057A DISCOVER VMANAGE SERVERS"
+  block:
+    - name: "1057B EXTRACT CUSTOMER SHORT-NAME"
+      set_fact:
+        shortname: "{{ DNSEntityName.split('-') | first }}"
+      delegate_to: localhost
+      run_once: true
+
+    - name: "1057C GET VMANAGE FROM INVENTORY-SEARCH"
+      ansible.builtin.uri:
+        url: "{{ iAutomate_DEVICE_ATTRS_BASE_URL }}inventory-search?invlvl={{ dbESP }}&shortName={{ shortname }}&deviceType=Viptela%20vManage"
+        method: GET
+        return_content: yes
+        validate_certs: no
+        follow_redirects: all
+        timeout: 60
+      register: getCustomerVmanageCall
+      delegate_to: localhost
+      run_once: true
+
+    - name: "1057D EXTRACT VMANAGE IPs AND ENTITY IDs"
+      set_fact:
+        vmanageDiscoveryDict: >
+          {{
+            vmanageDiscoveryDict | combine({
+              'VmanageIPs': (getCustomerVmanageCall['json']['devices']
+                | map(attribute='device')
+                | map(attribute='mgmtIPAddress')
+                | list),
+              'VmanageDevices': getCustomerVmanageCall['json']['devices']
+            })
+          }}
+      delegate_to: localhost
+      run_once: true
+
+    # HA disambiguation — same as Versa pattern (confirmed from BRD)
+    - name: "1057D2 GET VMANAGE ROLE FROM ATTRIBUTES API"
+      ansible.builtin.uri:
+        url: "{{ iAutomate_DEVICE_ATTRS_BASE_URL }}attributes/{{ vmanage_item.device.entityId }}"
+        method: GET
+        return_content: yes
+        validate_certs: no
+        follow_redirects: all
+        timeout: 60
+      loop: "{{ getCustomerVmanageCall['json']['devices'] }}"
+      loop_control:
+        loop_var: vmanage_item
+        label: "{{ vmanage_item.device.entityId }}"
+      register: getVmanageRolesCall
+      delegate_to: localhost
+      run_once: true
+      ignore_errors: true
+
+    - name: "1057D3 SET PRIMARY VMANAGE IP FROM ROLE"
+      set_fact:
+        vmanage_ip: "{{ role_item.vmanage_item.device.mgmtIPAddress }}"
+        vmanage_entity_id: "{{ role_item.vmanage_item.device.entityId }}"
+        vmanage_entity_number: "{{ role_item.vmanage_item.device.entityNumber }}"
+      loop: "{{ getVmanageRolesCall.results | default([]) }}"
+      loop_control:
+        loop_var: role_item
+        label: "{{ role_item.vmanage_item.device.entityId | default('?') }}"
+      when: >
+        role_item.json is defined and
+        (role_item.json.get('vManage Role', '') == 'Primary' or
+         role_item.json.get('vManage Role', '') == 'Active')
+      ignore_errors: true
+
+    # Fallback if HA role check found nothing — take first IP
+    - name: "1057E SET PRIMARY VMANAGE IP FALLBACK"
+      set_fact:
+        vmanage_ip: "{{ vmanageDiscoveryDict['VmanageIPs'] | first }}"
+        vmanage_entity_id: "{{ getCustomerVmanageCall['json']['devices'][0].device.entityId }}"
+        vmanage_entity_number: "{{ getCustomerVmanageCall['json']['devices'][0].device.entityNumber }}"
+      when: >
+        vmanageDiscoveryDict['VmanageIPs'] | length > 0 and
+        (vmanage_ip is not defined or vmanage_ip == '')
+
+    - name: "1057E2 UPDATE DISCOVERY DICT WITH PRIMARY IP"
+      set_fact:
+        vmanageDiscoveryDict: >
+          {{
+            vmanageDiscoveryDict | combine({
+              'PrimaryVmanageIP': vmanage_ip,
+              'Status': 'OK',
+              'Message': 'vManage server found for the customer.'
+            })
+          }}
+      when: vmanage_ip is defined and vmanage_ip != ''
+
+    - debug:
+        msg: "vManage IP discovered: {{ vmanage_ip | default('Not found') }}"
+
+    # FIX v6 — no-auth call removed (confirmed HTTP 500 in build 1369)
+    # discover-device-creds requires Bearer token — not available on iAutomate
+    # ansible_user/ansible_password (first in list) is sufficient for vManage auth
+
+    - name: "1057F DISCOVER-DEVICE-CREDS — WITH BEARER TOKEN"
+      ansible.builtin.uri:
+        url: "{{ iAutomate_DEVICE_ATTRS_BASE_URL }}discover-device-creds"
+        method: POST
+        headers:
+          Accept: application/json
+          Content-Type: application/json
+          Authorization: "Bearer {{ vcatsAuthToken | default('') }}"
+        body_format: json
+        body:
+          isAdhoc: "false"
+          requestorVzId: null
+          espCustomerNumber:
+            - "{{ customerNumber | int }}"
+          devices:
+            - entityId: "{{ vmanage_entity_id | int }}"
+              entityNumber: "{{ vmanage_entity_number | string }}"
+              credentialIds: "3"
+              credsRequired: "true"
+              tacacsRequired: "true"
+        return_content: yes
+        validate_certs: no
+        status_code: [200, 201, 400, 401, 403, 404]
+        timeout: 60
+      register: discoverCredsBearer
+      delegate_to: localhost
+      run_once: true
+      ignore_errors: true
+      no_log: true
+
+    # FIX v6 — only Bearer token attempt kept; no-auth path removed
+
+    - name: "1057G2 APPEND BEARER DISCOVERED CREDENTIALS IF AVAILABLE"
+      set_fact:
+        possibleVmanageCredentials: >
+          {{
+            possibleVmanageCredentials +
+            (discoverCredsBearer.json.entities[0].credentials.cinfo_3
+             | default([]) | list)
+          }}
+      when: >
+        discoverCredsBearer is defined and
+        discoverCredsBearer.status == 200 and
+        discoverCredsBearer.json.entities is defined
+      no_log: true
+      ignore_errors: true
+
+  rescue:
+    - name: "1057H VMANAGE DISCOVERY FAILED"
+      set_fact:
+        vmanageDiscoveryDict: >
+          {{
+            vmanageDiscoveryDict | combine({
+              'Status': 'ERROR',
+              'Message': 'Unable to resolve vManage servers for the customer.'
+            })
+          }}
+    - ansible.builtin.meta: clear_host_errors
+
+- name: "1058 AUTHENTICATE TO VMANAGE — LOOP ALL CREDENTIALS"
+  block:
+    - name: "1058A TRY LOGIN — ANSIBLE_USER FIRST THEN ALL CINFO TYPES"
+      ansible.builtin.uri:
+        url: "https://{{ vmanage_ip }}:{{ vmanagePort }}/j_security_check"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          j_username: "{{ cinfo_item.username }}"
+          j_password: "{{ cinfo_item.password }}"
+        return_content: yes
+        validate_certs: no
+        follow_redirects: all
+        timeout: 10
+        status_code: [200, 302]
+      register: vmanageLoginResults
+      loop: "{{ possibleVmanageCredentials }}"
+      loop_control:
+        loop_var: cinfo_item
+        label: "cinfo_login_attempt"
+      ignore_errors: true
+      delegate_to: localhost
+      run_once: true
+      no_log: true
+      when: possibleVmanageCredentials | length > 0
+
+    - name: "1058B FIND FIRST LOGIN WITH VALID JSESSIONID COOKIE"
+      set_fact:
+        vmanage_session: >
+          {{
+            vmanageLoginResults.results
+            | default([])
+            | selectattr('cookies', 'defined')
+            | list
+            | selectattr('cookies.JSESSIONID', 'defined')
+            | list
+            | first
+          }}
+      ignore_errors: true
+      no_log: true
+      when: vmanageLoginResults is defined
+
+    - name: "1058C EXTRACT JSESSIONID COOKIE"
+      set_fact:
+        vmanage_jsessionid: "{{ vmanage_session.cookies.JSESSIONID | default('') }}"
+      when: vmanage_session is defined and vmanage_session.cookies is defined
+      no_log: true
+
+    - name: "1058D GET XSRF TOKEN"
+      ansible.builtin.uri:
+        url: "https://{{ vmanage_ip }}:{{ vmanagePort }}/dataservice/client/token"
+        method: GET
+        headers:
+          Cookie: "JSESSIONID={{ vmanage_jsessionid }}"
+        return_content: yes
+        validate_certs: no
+        timeout: 10
+      register: vmanage_token_result
+      when: vmanage_jsessionid is defined and vmanage_jsessionid != ''
+      delegate_to: localhost
+      no_log: true
+
+    - name: "1058E SET VMANAGE API HEADERS"
+      set_fact:
+        vmanage_headers:
+          Content-Type: "application/json"
+          Cookie: "JSESSIONID={{ vmanage_jsessionid }}"
+          X-XSRF-TOKEN: "{{ vmanage_token_result.content | default('') }}"
+        vmanage_authenticated: true
+        vmanageAuthDict: >
+          {{
+            vmanageAuthDict | combine({
+              'Status': 'OK',
+              'Message': 'Authenticated to vManage successfully.'
+            })
+          }}
+      when: vmanage_jsessionid is defined and vmanage_jsessionid != ''
+      no_log: true
+
+    - debug:
+        msg: >
+          vManage authentication: {{ 'SUCCESS' if vmanage_authenticated | bool
+          else 'FAILED — none of the ' + (possibleVmanageCredentials | length | string)
+          + ' credentials matched vManage. Alarm clearance will be skipped.' }}
+
+  rescue:
+    - name: "1058F VMANAGE AUTH FAILED"
+      set_fact:
+        vmanageAuthDict: >
+          {{
+            vmanageAuthDict | combine({
+              'Status': 'ERROR',
+              'Message': 'Authentication failed for all available credentials.'
+            })
+          }}
+        vmanage_authenticated: false
+    - ansible.builtin.meta: clear_host_errors
+
+  when: vmanageDiscoveryDict['Status'] == "OK"
