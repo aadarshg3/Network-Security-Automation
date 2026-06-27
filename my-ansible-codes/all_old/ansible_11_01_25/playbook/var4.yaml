@@ -1,0 +1,41 @@
+# Example of playbook-variable
+#
+---
+- name: Example of playbook variable
+  hosts: servera
+  vars:
+    webroot: /var/www/html
+    websvc: httpd
+    web_port: 8081
+  tasks: 
+    - name: Install "{{websvc}}"
+      ansible.builtin.yum:
+        name: "{{websvc}}"
+        state: installed   # it could be also present # if provided, latest, it downloads latest one.
+
+    - name: start "{{websvc}}" service
+      ansible.builtin.service:
+        name: "{{websvc}}"
+        state: started
+
+    - name: change the port 80 to "{{web_port}}" 
+      ansible.builtin.lineinfile:
+        path: /etc/httpd/conf/httpd.conf
+        regexp: '^Listen '
+        insertafter: '^#Listen '
+        line: Listen "{{web_port}}"
+
+    - name: allow whitelist port number
+      ansible.posix.firewalld:
+        port: "{{web_port}}/tcp"
+        permanent: true
+        state: enabled
+        immediate: true
+    - name: create index.html page
+      ansible.builtin.copy: 
+        content: "Hello World! This is a WebServer \n"
+        dest: "{{webroot}}/index.html"
+
+
+
+

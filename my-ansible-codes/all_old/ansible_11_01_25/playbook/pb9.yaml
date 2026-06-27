@@ -1,0 +1,21 @@
+---
+- hosts: localhost
+  become: true
+  tasks: 
+    - name: user add in groups
+      user:
+        name: ravi
+        groups: "{{ item }}"
+        append: yes
+      with_items:  
+         - staff
+         - manager
+         - guest
+
+
+    - name: user add in groups
+      user:
+        name: ravi
+        groups: staff, guest, manager
+        append: yes
+

@@ -1,0 +1,6 @@
+switch_name,status,protocol,ip_address
+switch1,up,up,unassigned
+switch1,administratively down,down,unassigned
+switch1,up,up,unassigned
+switch1,up,up,unassigned
+switch1,up,up,192.168.10.147

@@ -1,0 +1,158 @@
+# ============================================================
+# Site Profiles — Category-aware Configuration
+#
+# The customer explicitly stated:
+#   "we have multiple categories based on region and metallic type,
+#    and therefore the use cases will vary depending on the category
+#    of the site."
+#
+# Profile resolution order:
+#   1. region + metallic_type + design_type (most specific)
+#   2. region + metallic_type
+#   3. region only
+#   4. default (fallback)
+# ============================================================
+
+# ── Default profile (fallback for all sites) ──────────────────
+default:
+  description: "Default profile — applies when no region/metallic match found"
+  enabled_use_cases:
+    - uc1
+    - uc2
+    - uc3
+    - uc4
+  fw_transit_vlan_default: 50
+  subif_delimiter: "."
+  interface_naming_pattern: "{base_interface}.{vlan}"
+  vpn0_transport_vpn: 0
+  corporate_vpn: 30
+  pepguest_vpn: 10
+  pepinet_vpn: 20
+  validation:
+    check_duplicate_variables: true
+    check_ip_format: true
+    check_vlan_range: true
+    vlan_min: 1
+    vlan_max: 4094
+
+# ── Region: APAC — Metallic: Gold ──────────────────────────────
+profiles:
+  - id: "apac_gold"
+    region: "APAC"
+    metallic_type: "Gold"
+    design_type: null   # matches any design_type for this region+metallic
+    description: "APAC Gold sites — full cutover flow"
+    enabled_use_cases:
+      - uc1
+      - uc2
+      - uc3
+      - uc4
+    fw_transit_vlan_default: 50
+    corporate_vpn: 30
+    pepguest_vpn: 10
+    pepinet_vpn: 20
+
+  - id: "apac_silver"
+    region: "APAC"
+    metallic_type: "Silver"
+    design_type: null
+    description: "APAC Silver sites — UC1 + UC2 only"
+    enabled_use_cases:
+      - uc1
+      - uc2
+    fw_transit_vlan_default: 50
+    corporate_vpn: 30
+    pepguest_vpn: 10
+    pepinet_vpn: 20
+
+  - id: "emea_gold"
+    region: "EMEA"
+    metallic_type: "Gold"
+    design_type: null
+    description: "EMEA Gold sites — full flow with alternate VLAN defaults"
+    enabled_use_cases:
+      - uc1
+      - uc2
+      - uc3
+      - uc4
+    fw_transit_vlan_default: 100
+    corporate_vpn: 30
+    pepguest_vpn: 5
+    pepinet_vpn: 12
+
+  - id: "emea_gold_newdesign"
+    region: "EMEA"
+    metallic_type: "Gold"
+    design_type: "NewDesign"
+    description: "EMEA Gold NewDesign — custom VPN assignments"
+    enabled_use_cases:
+      - uc1
+      - uc2
+      - uc3
+      - uc4
+    fw_transit_vlan_default: 200
+    corporate_vpn: 30
+    pepguest_vpn: 300
+    pepinet_vpn: 301
+
+  - id: "amer_bronze"
+    region: "AMER"
+    metallic_type: "Bronze"
+    design_type: null
+    description: "AMER Bronze — minimal deployment (UC1 + UC2)"
+    enabled_use_cases:
+      - uc1
+      - uc2
+    fw_transit_vlan_default: 50
+    corporate_vpn: 30
+    pepguest_vpn: 10
+    pepinet_vpn: 20
+
+# ── Sample site definitions ────────────────────────────────────
+sites:
+  site1:
+    site_name: "site1"
+    device_name: "cedge-site1-01"
+    system_ip: "1.1.1.10"
+    device_uuid: ""            # fill from vManage
+    region: "APAC"
+    metallic_type: "Gold"
+    design_type: null
+    device_template_id: ""     # fill from vManage
+
+    # UC1: Tracker Enable
+    nat_template_name: ""
+    tracker_template_name: ""
+    tracker_src_ip: ""
+
+    # UC2: SIG Template
+    sig_template_name: ""
+    cisco_sig_cred_template_name: ""
+
+    # UC3: Create a Firewall Transit Interface
+    fw_physical_port: "GigabitEthernet0/0/1"
+    fw_transit_vlan: 50
+    fw_transit_vpn: 0
+    vpn0_noip_template_name: ""
+    firewall_transit_template_name: ""
+
+    # UC4: Create a Firewall Transit Interface
+    pepguest_vpn_id: 10
+    pepguest_vlan: 300
+    pepguest_ip: ""
+    pepguest_mask: ""
+    pepguest_dhcp_helper: ""
+    pepguest_vrrp_grpid: ""
+    pepguest_vrrp_priority: ""
+    pepguest_vrrp_vip: ""
+    pepguest_vpn_template_id: ""
+    pepguest_subif_template_id: ""
+    pepinet_vpn_id: 20
+    pepinet_vlan: 301
+    pepinet_ip: ""
+    pepinet_mask: ""
+    pepinet_vpn_template_id: ""
+    pepinet_subif_template_id: ""
+
+    # UC3/UC4 variable overrides (exact vManage variable key names)
+    variables: {}

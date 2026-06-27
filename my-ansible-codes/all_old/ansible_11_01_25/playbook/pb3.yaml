@@ -1,0 +1,59 @@
+---
+<<<<<<< HEAD
+=======
+- hosts: all
+  tasks:
+    - name: add ip and hostanme
+      copy:
+        content: |
+                  "ens160 ip is {{ ansible_ens33.ipv4.address }}
+                   ens33 ip is {{ ansible_ens34.ipv4.address }} "
+        dest: /tmp/report
+
+
+
+
+
+
+
+
+
+
+
+#---
+#- hosts: all
+#  tasks: 
+#    - name: add ip address and hostname
+#      lineinfile:
+#        line: "{{ ansible_default_ipv4['address'] }} {{ ansible_hostname }}"
+#        dest: /etc/hosts
+#=========================================================
+
+
+#---
+#- hosts: all
+#  tasks:
+#    - name: create motd file and update the distribution
+#      copy: 
+#        content: "your used memory is ::: {{ ansible_memory_mb['nocache']['used'] }}"
+#        dest: /etc/motd
+
+#=========================================================
+
+
+
+
+#---
+#- hosts: all
+#  tasks:
+#    - name: creat motd file and update the distribution
+#      copy:
+#        content: "your server family is {{ ansible_distribution }}"
+#        dest: /etc/motd
+#
+#    - name: append ip address and hostname 
+#      lineinfile:
+#        path: /etc/hosts
+#        line: "{{ansible_default_ipv4['address']}}"
+#        
+>>>>>>> 08ebe61 (playbooks)

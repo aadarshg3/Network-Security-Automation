@@ -1,0 +1,17 @@
+---
+- name: adding array in my pb
+  hosts: all
+  vars_files:
+    - array-variable.yaml
+  tasks:
+    - name: addign developer group
+      group: 
+        name: "{{ users.development.group_1 }}"
+        state: present
+
+    - name: adding aadarsh user
+      user:
+        name: "{{ users.development.user_1 }}"
+        groups: "{{ users.development.group_1 }}"
+        state: present
+

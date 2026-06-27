@@ -1,0 +1,22 @@
+routers:
+  - device_type: cisco_ios
+    host: 192.168.1.212
+    username: netg
+    password: netg
+    secret: enable_password
+    sheet_name: Router_1
+
+  - device_type: cisco_ios
+    host: 192.168.1.213
+    username: netg
+    password: netg
+    secret: enable_password
+    sheet_name: Router_2
+
+  - device_type: cisco_ios
+    host: 192.168.1.214
+    username: netg
+    password: netg
+    secret: enable_password
+    sheet_name: Router_3
+

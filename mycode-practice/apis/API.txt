@@ -1,0 +1,158 @@
+curl -X POST 'https://api.meraki.com/api/v1/organizations/123456/networks' \
+  -H 'X-Cisco-Meraki-API-Key: abc123xyz456' \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "name": "Data Center Core",
+        "productTypes": ["switch"],
+        "tags": ["core", "production"],
+        "timeZone": "America/New_York"
+      }' \
+  | python3 -m json.tool
+
+
+HTTP status 201 Created
+
+Error Code	Meaning	Fix Tip
+401	Unauthorized	Check your API key or token
+404	URL not found	Make sure the Org ID and endpoint are valid
+400	Bad request	Check your JSON formatting and fields
+403	Forbidden (permissions issue)	You may not have the required privileges
+
+===================================================
+
+Great! Let's dive into **Chapter 10: Working with Network APIs** from *"Network Programmability and Automation, 2nd Edition"* by Jason Edelman — but in a spoon-feeding, easy-to-understand way so you master it step by step.
+
+---
+
+## 🧠 **What Is This Chapter About?**
+This chapter teaches how to interact with network devices using **APIs** (Application Programming Interfaces), especially:
+
+- 🌐 HTTP-based APIs (RESTful and non-RESTful)
+- 🔐 NETCONF (XML over SSH)
+- 🌿 RESTCONF (REST-like interface using YANG models)
+- ⚡ gRPC/gNMI (modern high-speed telemetry protocols)
+
+We'll start with **HTTP APIs** (the easiest to begin with).
+
+---
+
+## 📦 1. HTTP-Based APIs for Networking
+
+### 🌟 Key Idea:
+Instead of logging into routers/switches via SSH or CLI, **we send an HTTP request** and get structured data (like JSON). Think of this like “Go fetch me the interface status.”
+
+---
+
+## ✅ **RESTful APIs**
+
+### 🤖 Client-Server Model
+- **Client:** You (e.g., Python script)
+- **Server:** The network device exposing the API
+
+### 🚫 Stateless
+Each request is self-contained. Unlike SSH, the server **does not remember your previous request**.
+
+### 🌍 Uniform Interface
+You use a **URL to point to a resource** (e.g., interface or routing table):
+```
+GET https://device/api/interfaces/Gig0/0
+```
+
+---
+
+## 🔑 HTTP Methods You Need to Know
+
+| Method  | What It Does                  | Use in Networking                  |
+|---------|-------------------------------|------------------------------------|
+| `GET`   | Fetch info                    | Get config or interface state      |
+| `POST`  | Create something new          | Add a VLAN or new config           |
+| `PUT`   | Replace something             | Overwrite an entire config         |
+| `PATCH` | Partially update              | Change just the hostname           |
+| `DELETE`| Remove something              | Delete an interface config         |
+
+> 🎯 Remember: `GET` never changes anything — it's read-only!
+
+---
+
+## 📤 Response Codes (Very Important)
+
+| Code   | What It Means            |
+|--------|--------------------------|
+| 200    | ✅ Success                |
+| 401    | 🔐 Unauthorized           |
+| 404    | ❌ Resource not found     |
+| 500    | 💥 Server error           |
+
+---
+
+## 🛠️ Hands-On with cURL (Command Line Tool)
+
+### 🧪 Example: Get all Meraki organizations
+
+```bash
+curl 'https://api.meraki.com/api/v1/organizations' \
+  -H 'X-Cisco-Meraki-API-Key: YOUR_API_KEY' \
+  -L | python3 -m json.tool
+```
+
+### ✅ Explanation:
+- `-H`: Adds HTTP header with your API key
+- `-L`: Follows redirects if needed
+- `| python3 -m json.tool`: Formats the JSON output neatly
+
+---
+
+## ✍️ POST Request to Create a Network
+
+```bash
+curl -X POST 'https://api.meraki.com/api/v1/organizations/ORG_ID/networks' \
+  -H 'X-Cisco-Meraki-API-Key: YOUR_API_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "My Network", "productTypes": ["switch"]}' \
+  | python3 -m json.tool
+```
+
+📌 This creates a new "switch" network for a given organization.
+
+---
+
+## 🚫 Non-RESTful APIs
+
+Some network devices still use **non-RESTful APIs**, often mimicking CLI commands.
+
+### 🔄 Example: Arista eAPI (JSON-RPC)
+```bash
+curl --insecure -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0", "method":"runCmds", "params":{"version":1, "cmds":["show version"], "format":"text"}, "id":""}' \
+  https://user:pass@device/command-api | python3 -m json.tool
+```
+
+> This sends a CLI command (`show version`) via HTTP!
+
+---
+
+## 🧪 Summary for This Part
+
+| Concept           | RESTful APIs                     | Non-RESTful APIs                |
+|------------------|----------------------------------|---------------------------------|
+| Verb Driven?     | Yes (GET, POST, etc.)            | Often uses only POST            |
+| Resource Specific| Yes (URLs change for resources)  | One URL for all                 |
+| Data Format      | JSON/XML                         | Often JSON with command string  |
+| Example Vendors  | Meraki, Cisco RESTCONF           | Arista eAPI (RPC-based)         |
+
+---
+
+## 🧰 Tools You Can Use
+
+- ✅ **cURL** – CLI-based, works everywhere
+- 🌈 **Postman** – GUI tool, great for learning and testing
+- 🐍 **Python Requests** – For scripting/automation (explained in Chapter 10.2)
+
+---
+
+Let me know when you're ready and I’ll move to the **next section of Chapter 10**, where you’ll learn to **use NETCONF, RESTCONF, gRPC, and automate these APIs using Python**.
+
+Would you like to proceed now or take a quiz on what you've learned?
+===========================
+

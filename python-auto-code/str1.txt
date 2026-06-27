@@ -1,0 +1,198 @@
+Microsoft Windows [Version 10.0.19045.5131]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Users\NetG>python
+Python 3.13.0 (tags/v3.13.0:60403a5, Oct  7 2024, 09:38:07) [MSC v.1941 64 bit (AMD64)] on win32
+Type "help", "copyright", "credits" or "license" for more information.
+>>>
+>>>
+>>>
+>>> device = "Router"
+>>> device[0]
+'R'
+>>> device[1]
+'o'
+>>> device[2]
+'u'
+>>> device[3]
+'t'
+>>> device[4]
+'e'
+>>> device[5]
+'r'
+>>>
+>>> device[6]
+Traceback (most recent call last):
+  File "<python-input-11>", line 1, in <module>
+    device[6]
+    ~~~~~~^^^
+IndexError: string index out of range
+>>>
+>>> device[-1]
+'r'
+>>> device[-2]
+'e'
+>>> device[-3]
+'t'
+>>> device[-4]
+'u'
+>>> device[-5]
+'o'
+>>> device[-6]
+'R'
+>>> device[-7]
+Traceback (most recent call last):
+  File "<python-input-19>", line 1, in <module>
+    device[-7]
+    ~~~~~~^^^^
+IndexError: string index out of range
+>>>
+>>>
+>>> device[0:2]
+'Ro'
+>>> device[0:3]
+'Rou'
+>>> device[0:4]
+'Rout'
+>>> device[2:4]
+'ut'
+>>> device[::-1]
+'retuoR'
+>>>
+>>> device[1:6]
+'outer'
+>>>
+>>> device[1:6:1]
+'outer'
+>>> device[1:6:2]
+'otr'
+>>> device[1:6:3]
+'oe'
+>>>
+>>> device[1:6:-1]
+''
+>>> device[::-1]
+'retuoR'
+>>>
+>>>
+>>> id(device)
+1726126258864
+>>> print(device)
+Router
+>>>
+>>> dir(str)
+['__add__', '__class__', '__contains__', '__delattr__', '__dir__', '__doc__', '__eq__', '__format__', '__ge__', '__getattribute__', '__getitem__', '__getnewargs__', '__getstate__', '__gt__', '__hash__', '__init__', '__init_subclass__', '__iter__', '__le__', '__len__', '__lt__', '__mod__', '__mul__', '__ne__', '__new__', '__reduce__', '__reduce_ex__', '__repr__', '__rmod__', '__rmul__', '__setattr__', '__sizeof__', '__str__', '__subclasshook__', 'capitalize', 'casefold', 'center', 'count', 'encode', 'endswith', 'expandtabs', 'find', 'format', 'format_map', 'index', 'isalnum', 'isalpha', 'isascii', 'isdecimal', 'isdigit', 'isidentifier', 'islower', 'isnumeric', 'isprintable', 'isspace', 'istitle', 'isupper', 'join', 'ljust', 'lower', 'lstrip', 'maketrans', 'partition', 'removeprefix', 'removesuffix', 'replace', 'rfind', 'rindex', 'rjust', 'rpartition', 'rsplit', 'rstrip', 'split', 'splitlines', 'startswith', 'strip', 'swapcase', 'title', 'translate', 'upper', 'zfill']
+>>> dir(list)
+['__add__', '__class__', '__class_getitem__', '__contains__', '__delattr__', '__delitem__', '__dir__', '__doc__', '__eq__', '__format__', '__ge__', '__getattribute__', '__getitem__', '__getstate__', '__gt__', '__hash__', '__iadd__', '__imul__', '__init__', '__init_subclass__', '__iter__', '__le__', '__len__', '__lt__', '__mul__', '__ne__', '__new__', '__reduce__', '__reduce_ex__', '__repr__', '__reversed__', '__rmul__', '__setattr__', '__setitem__', '__sizeof__', '__str__', '__subclasshook__', 'append', 'clear', 'copy', 'count', 'extend', 'index', 'insert', 'pop', 'remove', 'reverse', 'sort']
+>>> dir(list)
+['__add__', '__class__', '__class_getitem__', '__contains__', '__delattr__', '__delitem__', '__dir__', '__doc__', '__eq__', '__format__', '__ge__', '__getattribute__', '__getitem__', '__getstate__', '__gt__', '__hash__', '__iadd__', '__imul__', '__init__', '__init_subclass__', '__iter__', '__le__', '__len__', '__lt__', '__mul__', '__ne__', '__new__', '__reduce__', '__reduce_ex__', '__repr__', '__reversed__', '__rmul__', '__setattr__', '__setitem__', '__sizeof__', '__str__', '__subclasshook__', 'append', 'clear', 'copy', 'count', 'extend', 'index', 'insert', 'pop', 'remove', 'reverse', 'sort']
+>>>
+>>> dir(str)
+['__add__', '__class__', '__contains__', '__delattr__', '__dir__', '__doc__', '__eq__', '__format__', '__ge__', '__getattribute__', '__getitem__', '__getnewargs__', '__getstate__', '__gt__', '__hash__', '__init__', '__init_subclass__', '__iter__', '__le__', '__len__', '__lt__', '__mod__', '__mul__', '__ne__', '__new__', '__reduce__', '__reduce_ex__', '__repr__', '__rmod__', '__rmul__', '__setattr__', '__sizeof__', '__str__', '__subclasshook__', 'capitalize', 'casefold', 'center', 'count', 'encode', 'endswith', 'expandtabs', 'find', 'format', 'format_map', 'index', 'isalnum', 'isalpha', 'isascii', 'isdecimal', 'isdigit', 'isidentifier', 'islower', 'isnumeric', 'isprintable', 'isspace', 'istitle', 'isupper', 'join', 'ljust', 'lower', 'lstrip', 'maketrans', 'partition', 'removeprefix', 'removesuffix', 'replace', 'rfind', 'rindex', 'rjust', 'rpartition', 'rsplit', 'rstrip', 'split', 'splitlines', 'startswith', 'strip', 'swapcase', 'title', 'translate', 'upper', 'zfill']
+>>>
+>>> help(str.upper)
+Help on method_descriptor:
+
+upper(self, /) unbound builtins.str method
+    Return a copy of the string converted to uppercase.
+
+>>>
+>>> print("Hello")
+Hello
+>>> list1 = [1,3,4,5]
+>>> print(list1)
+[1, 3, 4, 5]
+>>>
+>>>
+>>> device
+'Router'
+>>> device.upper()
+'ROUTER'
+>>>
+>>> list1.upper()
+Traceback (most recent call last):
+  File "<python-input-57>", line 1, in <module>
+    list1.upper()
+    ^^^^^^^^^^^
+AttributeError: 'list' object has no attribute 'upper'
+>>>
+>>>
+>>>
+>>>
+>>> dir(str)
+['__add__', '__class__', '__contains__', '__delattr__', '__dir__', '__doc__', '__eq__', '__format__', '__ge__', '__getattribute__', '__getitem__', '__getnewargs__', '__getstate__', '__gt__', '__hash__', '__init__', '__init_subclass__', '__iter__', '__le__', '__len__', '__lt__', '__mod__', '__mul__', '__ne__', '__new__', '__reduce__', '__reduce_ex__', '__repr__', '__rmod__', '__rmul__', '__setattr__', '__sizeof__', '__str__', '__subclasshook__', 'capitalize', 'casefold', 'center', 'count', 'encode', 'endswith', 'expandtabs', 'find', 'format', 'format_map', 'index', 'isalnum', 'isalpha', 'isascii', 'isdecimal', 'isdigit', 'isidentifier', 'islower', 'isnumeric', 'isprintable', 'isspace', 'istitle', 'isupper', 'join', 'ljust', 'lower', 'lstrip', 'maketrans', 'partition', 'removeprefix', 'removesuffix', 'replace', 'rfind', 'rindex', 'rjust', 'rpartition', 'rsplit', 'rstrip', 'split', 'splitlines', 'startswith', 'strip', 'swapcase', 'title', 'translate', 'upper', 'zfill']
+>>>
+>>> device_intf = "GigabitEthernet0/1"
+>>>
+>>> device_intf == "GigabitEthernet0/1"
+True
+>>>
+>>> device_intf == "gigabitEthernet0/1"
+False
+>>>
+>>> device_intf == "GIGABITETHERNET0/1"
+False
+>>> device_intf
+'GigabitEthernet0/1'
+>>>
+>>> device_intf.upper()
+'GIGABITETHERNET0/1'
+>>>
+>>> device_intf.upper() == "GIGABITETHERNET0/1"
+True
+>>>
+>>> device_intf.lower() == "gigabitethernet0/1"
+True
+>>>
+>>> if device_intf.lower() == "gigabitethernet0/1":
+...     print("Interface FOUND")
+... else:
+...     print("Interface NOT FOUND")
+...
+Interface FOUND
+>>>
+>>>
+>>> dir(str)
+['__add__', '__class__', '__contains__', '__delattr__', '__dir__', '__doc__', '__eq__', '__format__', '__ge__', '__getattribute__', '__getitem__', '__getnewargs__', '__getstate__', '__gt__', '__hash__', '__init__', '__init_subclass__', '__iter__', '__le__', '__len__', '__lt__', '__mod__', '__mul__', '__ne__', '__new__', '__reduce__', '__reduce_ex__', '__repr__', '__rmod__', '__rmul__', '__setattr__', '__sizeof__', '__str__', '__subclasshook__', 'capitalize', 'casefold', 'center', 'count', 'encode', 'endswith', 'expandtabs', 'find', 'format', 'format_map', 'index', 'isalnum', 'isalpha', 'isascii', 'isdecimal', 'isdigit', 'isidentifier', 'islower', 'isnumeric', 'isprintable', 'isspace', 'istitle', 'isupper', 'join', 'ljust', 'lower', 'lstrip', 'maketrans', 'partition', 'removeprefix', 'removesuffix', 'replace', 'rfind', 'rindex', 'rjust', 'rpartition', 'rsplit', 'rstrip', 'split', 'splitlines', 'startswith', 'strip', 'swapcase', 'title', 'translate', 'upper', 'zfill']
+>>>
+>>> ip = "10.2.3.4"
+>>>
+>>> if ip.startswith("10"):
+...     print("Class A private ip")
+...
+Class A private ip
+>>>
+>>> ip = "100.2.3.4"
+>>>
+>>> if ip.startswith("10"):
+...     print("Class A private ip")
+...
+Class A private ip
+>>>
+>>> if ip.startswith("10."):
+...     print("Class A private ip")
+...
+>>> ip = "10.2.3.4"
+>>>
+>>> if ip.startswith("10."):
+...     print("Class A private ip")
+...
+Class A private ip
+>>>
+>>> if ip.startswith("10."):
+...     print("Class A private ip")
+... else:
+...     print("Not Class A private ip")
+...
+Class A private ip
+>>>
+>>>
+>>> ip = "100.2.3.4"
+>>>
+>>> if ip.startswith("10."):
+...     print("Class A private ip")
+... else:
+...     print("Not Class A private ip")
+...
+Not Class A private ip
+>>>

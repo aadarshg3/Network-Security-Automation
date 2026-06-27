@@ -1,0 +1,9 @@
+vlans:
+  - id: 10
+    name: SALES
+  - id: 20
+    name: HR
+  - id: 30
+    name: IT
+  - id: 40
+    name: FINANCE

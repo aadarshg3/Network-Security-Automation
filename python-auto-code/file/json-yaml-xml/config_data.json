@@ -1,0 +1,7 @@
+{
+"intf": "Gig",
+"bw": 1000,
+"speed": 1000,
+"duplex": "full"
+
+}

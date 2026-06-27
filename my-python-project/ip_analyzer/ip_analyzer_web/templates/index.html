@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>IP Analyzer</title>
+</head>
+<body>
+    <h1>IP Analyzer</h1>
+    <form method="POST">
+        <input type="text" name="ip_address" placeholder="Enter IP address" required>
+        <button type="submit">Analyze</button>
+    </form>
+    <br>
+    {% if result %}
+        <h2>{{ result }}</h2>
+    {% endif %}
+</body>
+</html>
+

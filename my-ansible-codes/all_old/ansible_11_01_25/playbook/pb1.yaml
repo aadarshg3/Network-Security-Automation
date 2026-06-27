@@ -1,0 +1,10 @@
+---
+  - name: Example of command line
+    hosts: servera
+    tasks: 
+      - name: add user and apply password
+        user:
+            name: "{{ username }}"
+            password: "{{ mypass | password_hash('sha512') }}"
+    
+

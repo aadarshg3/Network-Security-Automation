@@ -1,0 +1,21 @@
+{
+    "bgpconfig":  
+                [
+                {"R1config": 
+                    {"localAS": 100,
+                    "remoteAS": 200,
+                    "remoteip": "1.1.1.1"}},
+    
+                {"R2config": 
+                    {"localAS": 100,
+                    "remoteAS": 200,
+                    "remoteip": "1.1.1.1"}},
+    
+                {"R3config": 
+                    {"localAS": 100,
+                    "remoteAS": 200,
+                    "remoteip": "1.1.1.1"}}
+    
+                
+                ]
+            }

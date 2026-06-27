@@ -1,0 +1,18 @@
+# ansible-playbook -i inv.ini pb_playing_with_inventory.yaml --limit "switch1,switch2"
+# ansible-playbook -i inv.ini pb_playing_with_inventory.yaml --limit "switch1"
+---
+- name: Play A
+  # hosts: "{{ device }}"
+  # hosts: "switches"
+  # hosts: "switch1"
+  # hosts: "switch12"
+  hosts: switches, routers
+  # hosts: routers
+  gather_facts: false
+
+  tasks:
+    - name: "1010 - OUTPUT DEVICE TYPE"
+      debug:
+        var: ansible_host
+
+

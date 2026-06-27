@@ -1,0 +1,36 @@
+---
+- name: Enable internet services
+  hosts: serverb
+  tasks: 
+    name: Install Latest version of pkg name firewalld, httpd, mariadb-server, php, php-mysqlnd
+    ansible.builtin.dnf:
+      - name:
+          - firewalld
+          - httpd
+          - mariadb-server
+          - php
+          - php-mysqlnd
+        state: latest
+    
+    name: Enable Firewalld service 
+    ansible.builtin.service:
+      name: firewalld
+      state: active
+      enabled: yes
+    
+    name: copy index.php file to /var/www/html
+    ansible.builtin.copy:
+      src: /home/aadarsh/ansible/playbook/index.php
+      dest: /var/www/html
+      mode: 0644
+
+- name: @@@-===2nd_Play=====@@@
+  hosts: 192.168.205.151
+  tasks:
+    name: Test webserver running on serverb
+    ansible.builtin.command:
+      cmd: curl http://serverb:80
+    name: validate the syntax of playbook
+    ansible.builtin.command:
+      cmd: ansible-playbook -i ../inv internet.yaml --syntax-check
+

@@ -1,0 +1,29 @@
+Variable: what is variable? how can define a variable? Array? Register Variable?
+
+# variable :
+you can store the value in it. It is like a container in which you can store the value.
+variable can make you static playboon on dynamic playbook. And it can simplify your work and 
+make it available for every person.
+
+=======================
+variables are made of key value pair. For ex: name=idress.
+echo $(name) in Linux
+output=idress
+
+Array: 1 variable with multiple values in it is called an array.
+
+QUESTION:
+
+what is register variable and how can put it in the PB?
+industry use case of register variable.
+
+what is facts and why out pb first default task is gathering_facts?
+
+Loop
+
+
+
+
+
+
+

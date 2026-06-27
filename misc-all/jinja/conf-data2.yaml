@@ -1,0 +1,18 @@
+---
+
+- intf_name: Ethernet0/0
+  desc: Connected to Server1
+  duplex: full
+
+
+- intf_name: Ethernet0/1
+  desc: Connected to Server2
+  duplex: full
+
+- intf_name: Ethernet0/3
+  desc: Connected to Server3
+  duplex: full  
+
+- intf_name: Ethernet0/4
+  desc: Connected to Server4
+  duplex: full    

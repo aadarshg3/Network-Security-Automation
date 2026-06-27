@@ -1,0 +1,16 @@
+#Printing var 
+---
+- name: Play A
+  hosts: localhost
+  gather_facts: false
+  vars:
+    device: "Router"
+
+  tasks:
+    - name: Hello World
+      debug:
+        msg: "Hello World"
+    
+    - name: Print var
+      debug:
+        var: device

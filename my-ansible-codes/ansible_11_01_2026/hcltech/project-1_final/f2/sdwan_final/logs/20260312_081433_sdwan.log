@@ -1,0 +1,52 @@
+2026-03-12 08:14:37,209  INFO      sdwan.client - Login OK
+2026-03-12 08:14:38,686  INFO      sdwan.backup - Backup saved: backups/20260312_081438_uc3_before.json  template=b4a36a7a...
+2026-03-12 08:14:38,686  INFO      sdwan.uc3 - UC3 START
+2026-03-12 08:14:39,628  INFO      sdwan.uc3 - Rendered variables.j2:
+
+//system/host-name = cedge-test-1
+
+//system/system-ip = 1.1.1.60
+
+//system/site-id = 60
+
+/10/vpn_if_name/interface/if-name = GigabitEthernet2.10
+
+/10/vpn_if_name/interface/ip/address = 10.10.10.1/24
+
+/20/vpn_if_name/interface/if-name = GigabitEthernet2.20
+
+/20/vpn_if_name/interface/ip/address = 10.20.20.1/24
+
+/30/vpn_if_name/interface/if-name = GigabitEthernet2.30
+
+/30/vpn_if_name/interface/ip/address = 10.30.30.1/24
+
+/30//router/bgp/as-num = 65001
+
+/30//router/bgp/router-id = 10.30.30.1
+
+/30//router/bgp/neighbor/bgp_neighbor_address/address = 10.30.30.2
+
+/30//router/bgp/neighbor/bgp_neighbor_address/remote-as = 65002
+
+2026-03-12 08:14:39,628  INFO      sdwan.uc3 -   variable: //system/host-name=cedge-test-1
+2026-03-12 08:14:39,628  INFO      sdwan.uc3 -   variable: //system/system-ip=1.1.1.60
+2026-03-12 08:14:39,628  INFO      sdwan.uc3 -   variable: //system/site-id=60
+2026-03-12 08:14:39,628  INFO      sdwan.uc3 -   variable: /10/vpn_if_name/interface/if-name=GigabitEthernet2.10
+2026-03-12 08:14:39,628  INFO      sdwan.uc3 -   variable: /10/vpn_if_name/interface/ip/address=10.10.10.1/24
+2026-03-12 08:14:39,628  INFO      sdwan.uc3 -   variable: /20/vpn_if_name/interface/if-name=GigabitEthernet2.20
+2026-03-12 08:14:39,628  INFO      sdwan.uc3 -   variable: /20/vpn_if_name/interface/ip/address=10.20.20.1/24
+2026-03-12 08:14:39,628  INFO      sdwan.uc3 -   variable: /30/vpn_if_name/interface/if-name=GigabitEthernet2.30
+2026-03-12 08:14:39,628  INFO      sdwan.uc3 -   variable: /30/vpn_if_name/interface/ip/address=10.30.30.1/24
+2026-03-12 08:14:39,628  INFO      sdwan.uc3 -   variable: /30//router/bgp/as-num=65001
+2026-03-12 08:14:39,628  INFO      sdwan.uc3 -   variable: /30//router/bgp/router-id=10.30.30.1
+2026-03-12 08:14:39,628  INFO      sdwan.uc3 -   variable: /30//router/bgp/neighbor/bgp_neighbor_address/address=10.30.30.2
+2026-03-12 08:14:39,629  INFO      sdwan.uc3 -   variable: /30//router/bgp/neighbor/bgp_neighbor_address/remote-as=65002
+2026-03-12 08:14:39,629  INFO      sdwan.uc3 - UC3 inputs ready
+2026-03-12 08:14:45,167  INFO      sdwan.diff - Excel diff saved: outputs/20260312_081444_diff_report.xlsx
+2026-03-12 08:14:45,167  INFO      sdwan.diff - Diff saved prefix=20260312_081444
+2026-03-12 08:14:45,287  INFO      sdwan.client - Deploy triggered: push_feature_template_configuration-4a750d6a-9064-4cb9-845b-50f1bc78b690
+2026-03-12 08:14:55,417  ERROR     sdwan.main - Deploy failure UC3: {'status': 'done', 'success': 0, 'failure': 1, 'data': [{'activity': ['[12-Mar-2026 8:13:38 UTC] Configuring device with feature template: UC3-LAB-Device-Template', '[12-Mar-2026 8:13:39 UTC] Checking and creating device in vManage', '[12-Mar-2026 8:13:39 UTC] Generating configuration from template', '[12-Mar-2026 8:13:44 UTC] Device is online', '[12-Mar-2026 8:13:44 UTC] Updating device configuration in vManage', '[12-Mar-2026 8:13:45 UTC] Sending configuration to device', '[12-Mar-2026 8:13:46 UTC] Error in generating configuration diff for the device'], 'statusType': 'push_feature_template_configuration', 'local-system-ip': '1.1.1.60', 'scheduledAction': False, 'system-ip': '1.1.1.60', 'templateId': 'b4a36a7a-99ee-4910-9f4e-82ebbd45d08e', 'uuid': 'C8K-D58AAC2B-26AD-BDA4-48AA-3C05F6FFABBA', 'tenant-id': 'default', '@rid': 1081, 'processId': 'push_feature_template_configuration-4a750d6a-9064-4cb9-845b-50f1bc78b690', 'actionConfig': '{"csv-status":"completed","csv-deviceId":"C8K-D58AAC2B-26AD-BDA4-48AA-3C05F6FFABBA","csv-deviceIP":"1.1.1.60","csv-host-name":"cedge-test-1","/30//router/bgp/as-num":"65001","/30//router/bgp/router-id":"10.30.30.1","/30//router/bgp/neighbor/bgp_neighbor_address/address":"10.30.30.2","/30//router/bgp/neighbor/bgp_neighbor_address/remote-as":"65002","/30/vpn_if_name/interface/if-name":"GigabitEthernet2.30","/30/vpn_if_name/interface/ip/address":"10.30.30.1/24","/20/vpn_if_name/interface/if-name":"GigabitEthernet2.20","/20/vpn_if_name/interface/ip/address":"10.20.20.1/24","/10/vpn_if_name/interface/if-name":"GigabitEthernet2.10","/10/vpn_if_name/interface/ip/address":"10.10.10.1/24","//system/host-name":"cedge-test-1","//system/system-ip":"1.1.1.60","//system/site-id":"60"}', 'device-type': 'vedge', 'action': 'push_feature_template_configuration', 'startTime': 1773303218264, 'order': 0, 'vmanageIP': '1.1.1.20', 'host-name': 'cedge-test-1', 'deviceID': 'C8K-D58AAC2B-26AD-BDA4-48AA-3C05F6FFABBA', 'statusId': 'failure', 'currentActivity': 'Error in generating configuration diff for the device', 'deviceModel': 'vedge-C8000V', 'validity': 'valid', 'requestStatus': 'received', 'lastUpdateTime': 1773303226070, 'status': 'Failure'}]}
+2026-03-12 08:14:55,417  WARNING   sdwan.main - Rollback triggered: device reported failure
+2026-03-12 08:14:55,915  INFO      sdwan.client - Rollback OK: b4a36a7a...
+2026-03-12 08:14:55,915  INFO      sdwan.main - Rollback successful template=b4a36a7a...

@@ -1,0 +1,10 @@
+---
+- name: Play A
+  hosts: localhost
+  #gather_facts: false
+  gather_facts: true
+
+  tasks:
+    - name: Hello World
+      debug:
+        msg: "Hello World"

@@ -1,0 +1,30 @@
+---
+- name: This is my first play to create user  # Playbook comment: 'name' is a description
+  hosts: servera                              # Target hosts (defined in inventory)
+  tasks:                                      # List of tasks for these hosts
+    - name: Creating development group for user ram
+      ansible.builtin.group:                  # Fully qualified module name (optional but recommended)
+        name: development                     # Group name to create
+        state: present                        # Ensure the group is present
+
+    - name: Creating ram user with id "1009"
+      ansible.builtin.user:                   # Fully qualified module name
+        name: ram                             # Username
+        state: present                        # Ensure user exists
+        uid: 1009                             # User ID (number, not a string)
+        groups: development                   # Assign user to 'development' group
+
+- name: This is my second play to create nginx pkg
+  hosts: serverb                              # <--- FIXED: was wrongly written as `host`
+  tasks:
+    - name: Installing nginx package
+      ansible.builtin.yum:                    # Use the 'yum' module
+        name: nginx                           # Package name
+        state: latest                         # Ensure the latest version is installed
+
+    - name: Starting nginx service
+      ansible.builtin.service:                # Use the 'service' module
+        name: nginx                           # Service name
+        state: started                        # Ensure service is running
+        enabled: yes                          # Enable at boot
+
