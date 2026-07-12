@@ -1,0 +1,9 @@
+intf_info:
+    desc: Connected to server-1
+    intf_names:
+    - gig0/1
+    - gig0/2
+    - gig0/3
+    speed: 1000
+model: Catalyst-9300
+vendor: cisco

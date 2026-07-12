@@ -1,0 +1,8 @@
+{% for item in bgp -%} 
+interface {{item["interface"]}}
+ip address {{item["host"]}}
+hostname {{item["hostname"]}}
+{% endfor -%}
+
+
+

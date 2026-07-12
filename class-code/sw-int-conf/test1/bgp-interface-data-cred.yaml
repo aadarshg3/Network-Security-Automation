@@ -1,0 +1,33 @@
+routers:
+  - name: Router1
+    host: 192.168.1.212
+    username: netg
+    password: netg
+    secret: netg
+    interfaces:
+      - id: eth1/1
+        ip: 10.1.1.1
+        mask: 255.255.255.252
+  - name: Router2
+    host: 192.168.1.213
+    username: netg
+    password: netg
+    secret: netg
+    interfaces: 
+      - id: eth1/1
+        ip: 10.1.1.2
+        mask: 255.255.255.252
+      - id: eth1/2
+        ip: 10.1.1.5
+        mask: 255.255.255.252
+  - name: Router3
+    host: 192.168.1.214
+    username: netg
+    password: netg
+    secret: netg
+    interfaces: 
+      - id: eth1/1
+        ip: 10.1.1.6
+        mask: 255.255.255.252
+
+

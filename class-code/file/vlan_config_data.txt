@@ -1,0 +1,18 @@
+vlan 2
+  name vlan_2
+vlan 3
+  name vlan_3
+vlan 4
+  name vlan_4
+vlan 5
+  name vlan_5
+vlan 6
+  name vlan_6
+vlan 7
+  name vlan_7
+vlan 8
+  name vlan_8
+vlan 9
+  name vlan_9
+vlan 10
+  name vlan_10

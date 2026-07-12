@@ -1,0 +1,23 @@
+routers:
+  - name: Router1
+    loopbacks:
+      - id: 1
+        ip: 10.1.1.1
+        mask: 255.255.255.255
+  - name: Router2
+    loopbacks:
+      - id: 1
+        ip: 10.1.1.2
+        mask: 255.255.255.255
+      - id: 2
+        ip: 10.1.1.5
+        mask: 255.255.255.255
+  - name: Router3
+    loopbacks:
+      - id: 1
+        ip: 10.1.1.6
+        mask: 255.255.255.255
+
+
+
+

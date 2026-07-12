@@ -1,0 +1,6 @@
+---
+
+nei_ip: 2.2.2.2
+remote_as: 200
+in_policy: NETG_IN
+out_policy: NETG_OUT

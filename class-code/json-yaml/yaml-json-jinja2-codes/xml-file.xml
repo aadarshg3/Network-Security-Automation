@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<root>
+    <bgpconfig>
+        <R1config>
+            <localAS>100</localAS>
+            <remoteAS>200</remoteAS>
+            <remoteip>1.1.1.1</remoteip>
+        </R1config>
+    </bgpconfig>
+    <bgpconfig>
+        <R2config>
+            <localAS>100</localAS>
+            <remoteAS>200</remoteAS>
+            <remoteip>1.1.1.1</remoteip>
+        </R2config>
+    </bgpconfig>
+    <bgpconfig>
+        <R3config>
+            <localAS>100</localAS>
+            <remoteAS>200</remoteAS>
+            <remoteip>1.1.1.1</remoteip>
+        </R3config>
+    </bgpconfig>
+</root>

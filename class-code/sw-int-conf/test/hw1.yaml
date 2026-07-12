@@ -1,0 +1,13 @@
+---
+
+- intf_name: eth0/0
+  desc: Connected to server1
+  duplex: full
+
+- intf_name: eth0/1
+  desc: Connected to server2
+  duplex: full
+
+- intf_name: eth0/2
+  desc: Connected to server3
+  duplex: full

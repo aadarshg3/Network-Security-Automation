@@ -1,0 +1,119 @@
+Building configuration...
+
+Current configuration : 1161 bytes
+!
+! Last configuration change at 11:06:39 UTC Sun Sep 15 2024 by netg
+!
+upgrade fpd auto
+version 15.0
+service timestamps debug datetime msec
+service timestamps log datetime msec
+no service password-encryption
+!
+hostname Router1
+!
+boot-start-marker
+boot-end-marker
+!
+!
+no aaa new-model
+!
+!
+!
+ip source-route
+ip cef
+!
+!
+!
+!
+ip domain name netg.com
+no ipv6 cef
+!
+multilink bundle-name authenticated
+!
+!
+!
+!
+!
+!
+!
+!
+username netg privilege 15 password 0 netg
+!
+redundancy
+!
+!
+! 
+!
+!
+!
+!
+!
+!
+!
+interface FastEthernet0/0
+ no ip address
+ shutdown
+ duplex half
+ !
+!
+interface Ethernet1/0
+ ip address 192.168.1.212 255.255.255.0
+ duplex full
+ !
+!
+interface Ethernet1/1
+ no ip address
+ shutdown
+ duplex half
+ !
+!
+interface Ethernet1/2
+ no ip address
+ shutdown
+ duplex half
+ !
+!
+interface Ethernet1/3
+ no ip address
+ shutdown
+ duplex half
+ !
+!
+!
+ip forward-protocol nd
+no ip http server
+no ip http secure-server
+!
+!
+!
+!
+!
+!
+!
+!
+!
+control-plane
+ !
+!
+!
+mgcp fax t38 ecm
+mgcp behavior g729-variants static-pt
+!
+!
+!
+gatekeeper
+ shutdown
+!
+!
+line con 0
+ stopbits 1
+line aux 0
+ stopbits 1
+line vty 0 4
+ privilege level 15
+ password netg
+ login local
+ transport input all
+!
+end

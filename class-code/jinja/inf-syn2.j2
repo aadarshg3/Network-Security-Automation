@@ -1,0 +1,14 @@
+{% for item in intf_conf_data -%} 
+interface {{ item.intf_name}}
+description {{ item.desc }}
+duplex {{ item.duplex }}
+{% endfor %}
+
+
+
+
+{% for item in intf_conf_data -%} 
+interface {{ item["intf_name"]}}
+description {{ item["desc"] }}
+duplex {{ item["duplex"] }}
+{% endfor %}

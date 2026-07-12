@@ -1,0 +1,5 @@
+router bgp {{bgp.as_no}}
+neighbor {{bgp.nei_ip}} remote-as {{bgp.remote_as}}
+neighbor {{bgp.nei_ip}} route-map {{bgp.in_policy}} in
+neighbor {{bgp.nei_ip}} route-map {{bgp.out_policy}} out
+

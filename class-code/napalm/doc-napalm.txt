@@ -1,0 +1,178 @@
+NAPALM Methods for Network Automation
+###################################################
+
+https://napalm.readthedocs.io/en/latest/base.html
+
+###################################################
+
+
+Here’s a list of the common NAPALM methods you can use to automate network infrastructure:
+
+1. get_facts()
+Description: This method retrieves general information about the device, such as its hostname, model, serial number, OS version, and uptime.
+Use Case: Gather inventory data from multiple network devices in your infrastructure.
+Example:
+
+python
+Copy code
+device.get_facts()
+2. get_interfaces()
+Description: Returns a list of interfaces and their operational statuses (up/down).
+Use Case: Monitor the status of all interfaces on a device for health checks or troubleshooting.
+Example:
+
+python
+Copy code
+device.get_interfaces()
+3. get_interfaces_ip()
+Description: Retrieves the IP addresses configured on all interfaces.
+Use Case: Collect IP addresses for managing subnets or resolving connectivity issues.
+Example:
+
+python
+Copy code
+device.get_interfaces_ip()
+4. get_arp_table()
+Description: Returns the ARP table of the device, including MAC addresses and their corresponding IPs.
+Use Case: Use this method for troubleshooting network traffic or security monitoring.
+Example:
+
+python
+Copy code
+device.get_arp_table()
+5. get_bgp_neighbors()
+Description: Returns BGP neighbors and their status (state, routes received, etc.).
+Use Case: Automate the collection of BGP information for monitoring and routing diagnostics.
+Example:
+
+python
+Copy code
+device.get_bgp_neighbors()
+6. get_lldp_neighbors()
+Description: Retrieves LLDP neighbors' information to discover adjacent devices.
+Use Case: Automate network topology discovery using LLDP (Link Layer Discovery Protocol).
+Example:
+
+python
+Copy code
+device.get_lldp_neighbors()
+7. get_mac_address_table()
+Description: Returns the MAC address table of the device.
+Use Case: Useful for tracking devices connected to specific ports and auditing MAC addresses.
+Example:
+
+python
+Copy code
+device.get_mac_address_table()
+8. get_ntp_peers()
+Description: Returns the list of NTP peers (network time synchronization) configured on the device.
+Use Case: Ensure accurate timekeeping across devices, especially in environments with logging and authentication systems.
+Example:
+
+python
+Copy code
+device.get_ntp_peers()
+9. get_ntp_servers()
+Description: Returns the list of NTP servers configured on the device.
+Use Case: Automate the process of verifying time synchronization configurations.
+Example:
+
+python
+Copy code
+device.get_ntp_servers()
+10. get_ntp_stats()
+Description: Returns statistics of NTP synchronization (e.g., offset, delay).
+Use Case: Automate checks on the accuracy and performance of NTP synchronization across the network.
+Example:
+
+python
+Copy code
+device.get_ntp_stats()
+11. get_snmp_information()
+Description: Returns information related to SNMP configuration on the device (e.g., community strings, SNMP versions).
+Use Case: Automate audits of SNMP configurations for network management systems.
+Example:
+
+python
+Copy code
+device.get_snmp_information()
+12. get_users()
+Description: Returns a list of users configured on the device.
+Use Case: Automate user access reviews to audit and monitor administrative accounts.
+Example:
+
+python
+Copy code
+device.get_users()
+13. get_config(retrieve)
+Description: Retrieves the running, startup, and candidate configuration from the device.
+Use Case: Automate the backup of device configurations for disaster recovery.
+Example:
+
+python
+Copy code
+device.get_config(retrieve='all')
+14. load_replace_candidate()
+Description: Loads a candidate configuration to replace the current running configuration.
+Use Case: Automate full configuration updates for a device with validation steps.
+Example:
+
+python
+Copy code
+device.load_replace_candidate(filename='new_config.txt')
+15. load_merge_candidate()
+Description: Merges the candidate configuration with the existing one.
+Use Case: Apply small configuration changes incrementally rather than overwriting the full configuration.
+Example:
+
+python
+Copy code
+device.load_merge_candidate(filename='partial_config.txt')
+16. commit_config()
+Description: Commits the candidate configuration (after loading a candidate configuration).
+Use Case: Automate the process of pushing configuration changes after review.
+Example:
+
+python
+Copy code
+device.commit_config()
+17. discard_config()
+Description: Discards the candidate configuration and keeps the existing one.
+Use Case: Abort the configuration change process in case of errors or if validation fails.
+Example:
+
+python
+Copy code
+device.discard_config()
+18. compare_config()
+Description: Compares the candidate configuration with the current running configuration.
+Use Case: Automate the comparison of configuration changes for review before committing them.
+Example:
+
+python
+Copy code
+device.compare_config()
+19. rollback()
+Description: Rolls back to a previous configuration version.
+Use Case: Automate the process of rolling back to a known good state after a failed configuration update.
+Example:
+
+python
+Copy code
+device.rollback()
+20. ping(destination)
+Description: Sends a ping to the specified destination and returns the results.
+Use Case: Automate network reachability tests across devices or segments.
+Example:
+
+python
+Copy code
+device.ping(destination='8.8.8.8')
+21. traceroute(destination)
+Description: Performs a traceroute to the specified destination.
+Use Case: Automate network path discovery and diagnostics.
+Example:
+
+python
+Copy code
+device.traceroute(destination='8.8.8.8')
