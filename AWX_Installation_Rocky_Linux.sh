@@ -315,7 +315,14 @@ deploy_awx() {
     done
     local left=$(( deadline - $(date +%s) ))
     (( left > 0 )) || die "Timeout waiting for ${d}"
-    "${KUBECTL}" -n awx rollout status "deployment/${d}" --timeout="${left}s"
+    if ! "${KUBECTL}" -n awx rollout status "deployment/${d}" --timeout="${left}s"; then
+      warn "Rollout deadline hit for ${d} (common on first-run migrations); polling until --wait-min"
+      until [[ $("${KUBECTL}" -n awx get deployment "${d}" -o jsonpath='{.status.availableReplicas}' 2>/dev/null || true) -ge 1 ]] 2>/dev/null; do
+        (( $(date +%s) < deadline )) || die "Timeout: ${d} not available (check: kubectl -n awx get pods; kubectl -n awx describe pod <name>)"
+        info "Waiting for ${d} to become available..."
+        sleep 20
+      done
+    fi
     pass "Deployment ${d} available"
   done
 }
