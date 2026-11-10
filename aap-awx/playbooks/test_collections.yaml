@@ -1,1 +1,8 @@
-
+---
+- name: Test that collections are installed
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Use a filter from the ansible.utils collection
+      ansible.builtin.debug:
+        msg: "{{ {'router': {'hostname': 'r1', 'asn': 65001}} | ansible.utils.to_paths }}"
