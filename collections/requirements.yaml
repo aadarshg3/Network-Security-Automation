@@ -1,1 +1,44 @@
+---
+# Collections installed by AAP/AWX on every project sync.
+# Versions verified on galaxy.ansible.com (2026-11-10).
+# Supported ansible-core window for this set: >=2.16.6, <2.19
+collections:
+  # Shared network libraries
+  - name: ansible.netcommon
+    version: "==8.7.1"
+  - name: ansible.utils
+    version: "==6.1.1"
+  - name: community.general
+    version: "==11.4.10"
 
+  # Device CLI over SSH / NETCONF
+  - name: cisco.ios
+    version: "==11.6.0"
+  - name: cisco.iosxr
+    version: "==13.0.0"
+  - name: cisco.nxos
+    version: "==13.0.0"
+  - name: cisco.asa
+    version: "==7.0.0"
+
+  # Catalyst Center (formerly DNA Center; cisco.dnac is deprecated)
+  - name: cisco.catalystcenter
+    version: "==2.14.0"
+
+  # Data center: ACI, NDO, Nexus Dashboard, NDFC, VXLAN EVPN as code
+  - name: cisco.aci
+    version: "==3.0.0"
+  - name: cisco.mso
+    version: "==3.0.0"
+  - name: cisco.nd
+    version: "==1.5.0"
+  - name: cisco.dcnm
+    version: "==3.13.1"
+  - name: cisco.nac_dc_vxlan
+    version: "==0.9.1"
+
+  # Cloud-managed and SD-WAN
+  - name: cisco.meraki
+    version: "==2.25.1"
+  - name: cisco.catalystwan
+    version: "==0.3.2"
