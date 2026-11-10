@@ -1,0 +1,109 @@
+---
+# secondary_primary_login.yaml - v53 Phase-2 OPT-IN fallback.
+#
+# Engages ONLY when enable_secondary_primary_login is true AND the existing MOP
+# jump (task 1259 / jump_ssh.py) did NOT already land - i.e. the cases that
+# otherwise escalate: a VRF-bound LAN interface (where the global-table ssh and
+# the non-VRF ping both fail) or an SSH refused by the primary VTY ACL where
+# telnet is open. Nothing here runs on the already-working path, so the
+# 98%-approved flow is unchanged. jump_ssh.py and task 1259 are NOT modified.
+#
+# Per-site, zero-assumption: the peer LAN IP, the interface, and the VRF are all
+# read from THIS device; the login protocol is chosen by what actually works
+# (ssh first, telnet fallback). Credentials come from device_password_chain
+# (CINFO) only, are passed on STDIN (never argv), every task is no_log, and all
+# captured transcript is scrub_credentials'd before it is written.
+
+- name: 1259B0 DERIVE FHRP PEER TARGET(S) FROM SECONDARY BRIEF
+  ansible.builtin.set_fact:
+    s2p_targets: >-
+      {{ (partner_vrrp_text | default('')) | fhrp_peer_targets(partner_standby_text | default(''), partner_ip) }}
+
+- name: 1259B1 SELECT FIRST PEER TARGET (ip + interface)
+  ansible.builtin.set_fact:
+    s2p_lan_ip: "{{ (s2p_targets | first).ip }}"
+    s2p_intf:   "{{ (s2p_targets | first).interface }}"
+  when: s2p_targets | default([]) | length > 0
+
+- name: 1259B2 READ PRIMARY-FACING INTERFACE CONFIG ON SECONDARY (per-site VRF detect)
+  ansible.builtin.script: >
+    tasks/device_ssh.py
+    'platform={{ detected_platform | default('ios') }}'
+    '{{ partner_ip }}'
+    '{{ secondary_login_user | default(ansible_user, true) }}'
+    '{{ secondary_login_password | default(ansible_password, true) }}'
+    '{{ ["show running-config interface " + s2p_intf] | to_json }}'
+  args:
+    executable: /usr/bin/python3.12
+  register: s2p_intf_raw
+  no_log: true
+  delegate_to: localhost
+  when: s2p_intf | default('') | length > 0
+
+- name: 1259B3 PARSE INTERFACE VRF (no 'vrf forwarding' line => global table)
+  ansible.builtin.set_fact:
+    s2p_vrf: >-
+      {{ ((s2p_intf_raw.stdout | safe_json_parse).outputs | default({})).get('show running-config interface ' + s2p_intf, '') | parse_intf_vrf }}
+  no_log: true
+  when:
+    - s2p_intf_raw is defined
+    - s2p_intf_raw.stdout is defined
+
+- name: 1259B4 SECONDARY -> PRIMARY LAN-SIDE LOGIN (VRF-aware SSH, telnet fallback)
+  # Self-contained script (no sibling import, no role_path). Secrets go on
+  # STDIN, never the command line; the task is no_log so neither the stdin nor
+  # the result are echoed.
+  ansible.builtin.script: >
+    tasks/sec_to_pri_login.py
+    '{{ partner_ip }}'
+    '{{ ansible_user }}'
+    '{{ s2p_lan_ip }}'
+    'vrf={{ s2p_vrf | default('') }}'
+    'allow_telnet={{ 1 if (enable_telnet_fallback | default(false) | bool) else 0 }}'
+    'platform={{ detected_platform | default('ios') }}'
+    'secondary_hostname={{ secondary_hostname | default(partner_neid) }}'
+  args:
+    executable: /usr/bin/python3.12
+    stdin: "{{ {'sec_pw': device_password_chain, 'pri_pw': device_password_chain, 'commands': _s2p_cmds} | to_json }}"
+  vars:
+    _s2p_cmds:
+      - "show version"
+      - "show ip interface brief"
+      - "show ip route"
+      - "show logging | exclude DMI-5-AUTH"
+      - "show ip bgp summary"
+  register: s2p_raw
+  no_log: true
+  delegate_to: localhost
+  when: s2p_lan_ip | default('') | length > 0
+
+- name: 1259B5 PARSE LOGIN RESULT
+  ansible.builtin.set_fact:
+    s2p_parsed: "{{ s2p_raw.stdout | safe_json_parse }}"
+  no_log: true
+  when:
+    - s2p_raw is defined
+    - s2p_raw.stdout is defined
+
+- name: 1259B6 LOG SECONDARY -> PRIMARY LAN-SIDE LOGIN RESULT (credential-scrubbed)
+  ansible.builtin.lineinfile:
+    path: "{{ iAutomate_INV_WS }}/output.dat"
+    line: |
+
+      ============================================================
+      SECONDARY -> PRIMARY LAN-SIDE LOGIN (v53 - {{ ('VRF ' + s2p_vrf) if (s2p_vrf | default('')) else 'global table' }})
+      ============================================================
+      Primary LAN IP   : {{ s2p_lan_ip }}  (interface {{ s2p_intf }})
+      Login method     : {{ s2p_parsed.method | default('none') | upper }}
+      Login result     : {{ 'SUCCESS' if (s2p_parsed.success | default(false)) else ('FAILED - ' + (s2p_parsed.detail | default('no detail') | scrub_credentials)) }}
+      {% if s2p_parsed.success | default(false) %}
+      {% for _cmd, _out in (s2p_parsed.outputs | default({})).items() %}
+
+      --- {{ _cmd }} (primary via {{ s2p_parsed.method | default('?') }}) ---
+      {{ _out | scrub_credentials | trim_cisco_legal }}
+      {% endfor %}
+      {% endif %}
+    insertafter: EOF
+    create: false
+  delegate_to: localhost
+  when: s2p_parsed is defined
